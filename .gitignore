@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+# Runtime outputs
+runs/
+.qwen_server.pid
+.qwen_server_ui_settings.yaml
+
+# Local model assets
+models/
