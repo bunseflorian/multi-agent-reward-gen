@@ -39,7 +39,7 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
 
     objective = st.text_area(
         "User Prompt",
-        value="Main Objective: Minimize distance to target position.\nSecondary Objectives: Maintain stable orientation.",
+        value="Main Objective: Minimize distance to target position.\nSecondary Objectives: Maintain low angular velocity.",
         height=90,
     )
     run_rl = st.checkbox("Run RL training", value=False)

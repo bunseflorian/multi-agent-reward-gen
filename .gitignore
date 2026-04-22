@@ -6,5 +6,6 @@ runs/
 .qwen_server.pid
 .qwen_server_ui_settings.yaml
 
-# Local model assets
-models/
+# Local model assets: keep the directory, ignore its contents
+models/*
+!models/.gitkeep
