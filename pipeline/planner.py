@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from ..core import PlanArtifact, TaskBrief
 from ..llm import QwenClient
-from ..llm.parsers import extract_final_answer, extract_plan_bullets, require_final_answer_terminator
-from .logger import LiveLogger, null_logger
+from ..llm.parsers import extract_final_answer, extract_plan_bullets
+from .logger import RunRecorder, null_logger
 from .prompts import PLANNER_SYSTEM_PROMPT, build_planner_prompt
 
 
@@ -17,7 +17,7 @@ class PlannerAgent:
         client: QwenClient,
         *,
         enable_thinking: bool = False,
-        logger: LiveLogger | None = None,
+        logger: RunRecorder | None = None,
     ):
         self.client = client
         self.enable_thinking = enable_thinking
@@ -30,12 +30,11 @@ class PlannerAgent:
         raw = self.client.generate_text(
             PLANNER_SYSTEM_PROMPT,
             prompt,
-            max_tokens=max(self.client.config.max_tokens, 4096),
+            max_tokens=6500,
             enable_thinking=self.enable_thinking,
         )
         self.logger.log_full(raw, agent="planner", kind="output")
 
-        require_final_answer_terminator(raw, "Planner")
         text = extract_final_answer(raw)
         self.logger.log_output(raw, agent="planner")
         return PlanArtifact(

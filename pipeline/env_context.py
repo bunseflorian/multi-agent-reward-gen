@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from ..configs import project_root as configured_project_root
+from ..configs import config_path
 from .env_patch import redact_reward_body
 
 
@@ -50,7 +50,7 @@ def load_env_context(
 ) -> tuple[Path, str, tuple[str, str]]:
     """Resolve env path, extract prompt context, and detect class names."""
 
-    root = Path(project_root) if project_root is not None else configured_project_root()
+    root = Path(project_root) if project_root is not None else config_path("paths.qwen_agent_root")
     path = Path(env_path).expanduser()
     if not path.is_absolute():
         path = root / path

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
-from typing import Callable
 
+from ..configs import config_get
 from ..core import (
     CodeArtifact,
     CodeReviewArtifact,
@@ -13,6 +14,7 @@ from ..core import (
     PlanArtifact,
     PPOConfig,
     PPOReport,
+    RunHooks,
     RunState,
     RunStatus,
     TaskBrief,
@@ -22,13 +24,10 @@ from ..llm import QwenApiError, QwenClient
 from .coder import CoderAgent
 from .critic import CriticAgent
 from .formatting import format_ppo_live_log
-from .logger import LiveLogger, null_logger
+from .logger import RunRecorder, null_logger
 from .planner import PlannerAgent
 from .reviewer import ReviewerAgent
 from .tester import TesterAgent
-
-
-_MAX_FORMAT_RETRIES = 3
 
 
 class MultiAgentRewardSystem:
@@ -38,7 +37,8 @@ class MultiAgentRewardSystem:
         self,
         client: QwenClient,
         *,
-        logger: LiveLogger | None = None,
+        recorder: RunRecorder | None = None,
+        logger: RunRecorder | None = None,
         planner: PlannerAgent | None = None,
         coder: CoderAgent | None = None,
         reviewer: ReviewerAgent | None = None,
@@ -47,7 +47,7 @@ class MultiAgentRewardSystem:
         agent_reasoning: dict[str, bool] | None = None,
     ):
         self.client = client
-        self.logger = logger or null_logger()
+        self.logger = recorder or logger or null_logger()
         reasoning = agent_reasoning or {}
         self.planner = planner or PlannerAgent(client, enable_thinking=reasoning.get("planner", False), logger=self.logger)
         self.coder = coder or CoderAgent(client, enable_thinking=reasoning.get("coder", False), logger=self.logger)
@@ -59,23 +59,51 @@ class MultiAgentRewardSystem:
         self,
         task_brief: TaskBrief,
         *,
-        max_iterations: int = 3,
+        max_iterations: int | None = None,
         max_rl_iterations: int | None = None,
         ppo_config: PPOConfig | None = None,
         run_dir: str | None = None,
-        status_callback: Callable[[str], None] | None = None,
+        stop_after_plan: bool = False,
+        initial_plan: PlanArtifact | None = None,
     ) -> RunState:
         """Run the full Planner → Coder → Reviewer → PPO → Critic loop."""
 
-        notify = status_callback or (lambda _msg: None)
         ppo_config = ppo_config or PPOConfig()
+        max_iterations = max_iterations if max_iterations is not None else int(config_get("pipeline.max_iterations"))
+        if max_rl_iterations is None:
+            max_rl_iterations = config_get("pipeline.max_rl_iterations")
+        hooks = ppo_config.hooks
         state = RunState(task_brief=task_brief, rl_training_skipped=not ppo_config.run_rl_training)
+        state.recorder = self.logger
+        self.logger.record_initial_artifacts(state)
+        self.logger.event(
+            "run_started",
+            task_id=task_brief.task_id,
+            env_source_path=task_brief.env_source_path,
+            run_rl_training=ppo_config.run_rl_training,
+        )
 
-        notify("Planner")
-        plan = self._plan_or_fail(task_brief, state)
-        if plan is None:
-            return state
+        if initial_plan is None:
+            if hooks.status_callback is not None:
+                hooks.status_callback("Planner")
+            self.logger.event("agent_started", agent="planner")
+            plan = self._plan_or_fail(task_brief, state)
+            if plan is None:
+                self.logger.event("run_finished", status=state.status.value, accepted=state.accepted)
+                self.logger.save_run_state(state)
+                return state
+            self.logger.event("agent_finished", agent="planner")
+        else:
+            plan = initial_plan
+            self.logger.event("plan_accepted")
+
+        state.plan = plan
         state.status = RunStatus.PLANNED
+
+        if stop_after_plan:
+            self.logger.event("run_finished", status=state.status.value, accepted=state.accepted)
+            self.logger.save_run_state(state)
+            return state
 
         loop = _IterationLoop(
             system=self,
@@ -86,7 +114,7 @@ class MultiAgentRewardSystem:
             run_dir=run_dir,
             max_iterations=max_iterations,
             target_rl_runs=max_rl_iterations if max_rl_iterations is not None else max_iterations,
-            notify=notify,
+            hooks=hooks,
         )
         return loop.execute()
 
@@ -119,7 +147,7 @@ class _IterationLoop:
         run_dir: str | None,
         max_iterations: int,
         target_rl_runs: int,
-        notify: Callable[[str], None],
+        hooks: RunHooks,
     ):
         self.system = system
         self.state = state
@@ -129,7 +157,8 @@ class _IterationLoop:
         self.run_dir = run_dir
         self.max_iterations = max_iterations
         self.target_rl_runs = target_rl_runs
-        self.notify = notify
+        self.max_format_retries = int(config_get("pipeline.max_format_retries"))
+        self.hooks = hooks
 
         self.reviewer_feedback: str | None = None
         self.critic_feedback: str | None = None
@@ -151,6 +180,7 @@ class _IterationLoop:
                 self.format_retries = 0
             except ValueError as exc:
                 if self._handle_format_error(exc):
+                    self._finish_run()
                     return self.state
                 continue
 
@@ -169,9 +199,12 @@ class _IterationLoop:
 
             finished = self._evaluate_iteration(code, code_review, test_report, ppo_report, critique)
             if finished:
+                self._finish_run()
                 return self.state
 
-        return self._finalize_after_loop()
+        state = self._finalize_after_loop()
+        self._finish_run()
+        return state
 
     # ---------------------------------------------------------------- helpers
 
@@ -181,18 +214,26 @@ class _IterationLoop:
         return self.iteration < self.max_iterations
 
     def _generate_and_review(self) -> tuple[CodeArtifact, CodeReviewArtifact, TestReport]:
-        self.notify(f"Coder (iteration {self.iteration})")
+        self._notify(f"Coder (iteration {self.iteration})")
+        self.system.logger.event("agent_started", agent="coder", iteration=self.iteration)
         code = self.system.coder.write_code(
-            self.task_brief,
             self.plan,
             previous_code=self.previous_code,
             reviewer_feedback=self.reviewer_feedback,
             critic_feedback=self.critic_feedback,
         )
+        self.system.logger.event("agent_finished", agent="coder", iteration=self.iteration)
         self.state.status = RunStatus.CODE_GENERATED
 
-        self.notify(f"Reviewer (iteration {self.iteration})")
-        code_review = self.system.reviewer.review(self.task_brief, self.plan, code)
+        self._notify(f"Reviewer (iteration {self.iteration})")
+        self.system.logger.event("agent_started", agent="reviewer", iteration=self.iteration)
+        code_review = self.system.reviewer.review(self.plan, code)
+        self.system.logger.event(
+            "agent_finished",
+            agent="reviewer",
+            iteration=self.iteration,
+            passed=code_review.passed,
+        )
         test_report = TestReport(
             passed=code_review.passed,
             errors=code_review.errors,
@@ -214,28 +255,56 @@ class _IterationLoop:
 
         if self.ppo_config.run_rl_training:
             self.rl_runs_started += 1
-            self.notify(f"PPO Training (iteration {self.iteration})")
+            self._notify(f"PPO Training (iteration {self.iteration})")
             self.state.status = RunStatus.PPO_RUNNING
             ppo_run_dir = _ppo_run_dir(self.run_dir, self.rl_runs_started)
+            self.system.logger.event(
+                "ppo_started",
+                iteration=self.iteration,
+                rl_run_index=self.rl_runs_started,
+                run_dir=ppo_run_dir,
+            )
         else:
             self.state.status = RunStatus.TESTED
             ppo_run_dir = self.run_dir
 
-        ppo_report = self.system.tester.test(self.task_brief, code, self.ppo_config, ppo_run_dir)
+        ppo_config = self._ppo_config_with_recording()
+        ppo_report = self.system.tester.test(self.task_brief, code, ppo_config, ppo_run_dir)
         if ppo_report is not None:
             self.system.logger.log_output(format_ppo_live_log(ppo_report), agent="ppo", extract=False)
+            self.system.logger.event(
+                "ppo_finished",
+                iteration=self.iteration,
+                status=ppo_report.status,
+                passed=ppo_report.passed,
+                log_path=ppo_report.log_path,
+                summary_path=ppo_report.summary_path,
+            )
         self.state.status = RunStatus.PPO_TESTED if self.ppo_config.run_rl_training else RunStatus.TESTED
 
         if ppo_report.status == "skipped":
             return ppo_report, None
 
-        self.notify(f"Critic (iteration {self.iteration})")
-        critique = self.system.critic.critique(self.task_brief, self.plan, code, ppo_report)
+        self._notify(f"Critic (iteration {self.iteration})")
+        self.system.logger.event("agent_started", agent="critic", iteration=self.iteration)
+        critique = self.system.critic.critique(self.plan, code, ppo_report)
+        self.system.logger.event(
+            "agent_finished",
+            agent="critic",
+            iteration=self.iteration,
+            should_retry=critique.should_retry,
+        )
         return ppo_report, critique
 
     def _handle_format_error(self, exc: ValueError) -> bool:
         self.format_retries += 1
-        if self.format_retries >= _MAX_FORMAT_RETRIES:
+        self.system.logger.event(
+            "format_error",
+            iteration=self.iteration,
+            retries=self.format_retries,
+            error=str(exc),
+        )
+        if self.format_retries >= self.max_format_retries:
             self.state.status = RunStatus.FAILED_FORMAT
             self.state.final_report = TestReport(
                 passed=False,
@@ -243,7 +312,7 @@ class _IterationLoop:
                 metadata={"stage": "format_check", "format_retries": self.format_retries},
             )
             return True
-        self.notify(f"Format error (retry {self.format_retries}/{_MAX_FORMAT_RETRIES}): {exc}")
+        self._notify(f"Format error (retry {self.format_retries}/{self.max_format_retries}): {exc}")
         return False
 
     def _evaluate_iteration(
@@ -301,6 +370,32 @@ class _IterationLoop:
             last = self.state.iterations[-1]
             _finalize_state(self.state, last.code, last.test_report, last.ppo_report)
         return self.state
+
+    def _notify(self, message: str) -> None:
+        if self.hooks.status_callback is not None:
+            self.hooks.status_callback(message)
+
+    def _ppo_config_with_recording(self) -> PPOConfig:
+        original_callback = self.ppo_config.hooks.ppo_progress_callback
+
+        def _record_progress(event: dict) -> None:
+            self.system.logger.event("ppo_progress", iteration=self.iteration, **event)
+            if original_callback is not None:
+                original_callback(event)
+
+        return replace(
+            self.ppo_config,
+            hooks=replace(self.ppo_config.hooks, ppo_progress_callback=_record_progress),
+        )
+
+    def _finish_run(self) -> None:
+        self.system.logger.event(
+            "run_finished",
+            status=self.state.status.value,
+            accepted=self.state.accepted,
+            iterations=len(self.state.iterations),
+        )
+        self.system.logger.save_run_state(self.state)
 
 
 def _finalize_state(

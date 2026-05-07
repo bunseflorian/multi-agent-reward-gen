@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..configs import get_path
+from ..configs import config_get, config_path
 
 
 @dataclass
@@ -27,7 +27,7 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
 
     st.header("Environment")
     labels = [str(p.relative_to(project_root)) for p in env_files]
-    default_label = str(get_path("environment", "default_env").relative_to(project_root))
+    default_label = str(config_path("paths.default_env").relative_to(project_root))
     selected = st.selectbox(
         "Environment file",
         labels,
@@ -39,15 +39,15 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
 
     objective = st.text_area(
         "User Prompt",
-        value="Main Objective: Minimize distance to target position.\nSecondary Objectives: Maintain low angular velocity.",
+        value=config_get("ui.objective"),
         height=90,
     )
-    run_rl = st.checkbox("Run RL training", value=False)
+    run_rl = st.checkbox("Run RL training", value=config_get("ppo.run_rl_training"))
     max_iterations = st.slider(
         "Max reviewer retries" if run_rl else "Max iterations",
         min_value=1,
         max_value=20 if run_rl else 8,
-        value=3,
+        value=config_get("ui.max_rl_reviewer_retries") if run_rl else config_get("ui.max_static_iterations"),
     )
     max_rl_iterations: int | None = None
     if run_rl:
@@ -55,10 +55,10 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
             "Max RL iterations",
             min_value=1,
             max_value=8,
-            value=2,
+            value=config_get("ui.max_rl_iterations"),
             help="Number of PPO runs to start unless the RL Critic accepts earlier.",
         )
-    output_dir = Path(st.text_input("Output directory", value=str(get_path("runtime", "runs_dir"))))
+    output_dir = Path(st.text_input("Output directory", value=str(config_path("paths.runs_dir"))))
 
     agent_reasoning = _agent_reasoning_expander(st)
 
@@ -66,10 +66,10 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
     if run_rl:
         st.subheader("PPO")
         ppo_kwargs = {
-            "num_envs": int(st.number_input("PPO num_envs", min_value=1, value=4096, step=1)),
-            "max_iterations": int(st.number_input("PPO max_iterations", min_value=10, value=150, step=10)),
-            "timeout_seconds": int(st.number_input("PPO timeout_seconds", min_value=30, value=300, step=30)),
-            "headless": st.checkbox("PPO headless", value=True),
+            "num_envs": int(st.number_input("PPO num_envs", min_value=1, value=config_get("ppo.num_envs") or 1, step=1)),
+            "max_iterations": int(st.number_input("PPO max_iterations", min_value=10, value=config_get("ppo.max_iterations") or 10, step=10)),
+            "timeout_seconds": int(st.number_input("PPO timeout_seconds", min_value=30, value=config_get("ppo.timeout_seconds") or 30, step=30)),
+            "headless": st.checkbox("PPO headless", value=config_get("ppo.headless")),
         }
 
     return TaskFormValues(

@@ -13,10 +13,9 @@ import os
 import sys
 from pathlib import Path
 
-from ..configs import get_path
-from ..core import PPOConfig
+from ..configs import build_ppo_config, config_get, config_path
 from ..llm import QwenApiError
-from ..pipeline import run_dir_name, save_run_state
+from ..pipeline import run_dir_name
 from ..server import qwen_server_is_ready
 from .display import print_state
 from .run import run_task
@@ -33,8 +32,8 @@ def main(argv: list[str] | None = None) -> int:
         if not _server_precheck():
             return 1
 
-    env_path = Path(args.env_path) if args.env_path else get_path("environment", "default_env")
-    output_root = Path(args.output_dir) if args.output_dir else get_path("runtime", "runs_dir")
+    env_path = Path(args.env_path) if args.env_path else config_path("paths.default_env")
+    output_root = Path(args.output_dir) if args.output_dir else config_path("paths.runs_dir")
 
     tmp_run_dir = output_root / f"_running_{env_path.stem}"
     tmp_run_dir.mkdir(parents=True, exist_ok=True)
@@ -46,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             max_rl_iterations=args.max_rl_iterations,
             env_path=env_path,
             objective=args.objective,
-            ppo_config=PPOConfig(
+            ppo_config=build_ppo_config(
                 run_rl_training=args.run_rl_training,
                 num_envs=args.ppo_num_envs,
                 max_iterations=args.ppo_max_iterations,
@@ -62,19 +61,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.ppo_run_dir is None:
         final_run_dir = output_root / run_dir_name(state)
         tmp_run_dir.rename(final_run_dir)
-        save_run_state(state, run_dir=final_run_dir)
+        state.recorder.move_to(final_run_dir)
+        state.recorder.save_run_state(state)
     print_state(state)
     return 0 if state.accepted else 2
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the local multi-agent reward-code generator.")
-    parser.add_argument("--max-iterations", type=int, default=3)
-    parser.add_argument("--max-rl-iterations", type=int, default=None)
+    parser.add_argument("--max-iterations", type=int, default=config_get("pipeline.max_iterations"))
+    parser.add_argument("--max-rl-iterations", type=int, default=config_get("pipeline.max_rl_iterations"))
     parser.add_argument("--env-path", type=Path, default=None)
     parser.add_argument("--objective", default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--run-rl-training", action="store_true", default=False)
+    parser.add_argument("--run-rl-training", action="store_true", default=config_get("ppo.run_rl_training"))
     parser.add_argument("--ppo-num-envs", type=int, default=None)
     parser.add_argument("--ppo-max-iterations", type=int, default=None)
     parser.add_argument("--ppo-timeout-seconds", type=int, default=None)

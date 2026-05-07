@@ -6,7 +6,6 @@ import json
 import subprocess
 from pathlib import Path
 
-from ..pipeline.formatting import format_metric_history
 from .command import configured_conda_env
 
 
@@ -23,6 +22,8 @@ def summarize_ppo_log(
     min_event_mtime: float | None = None,
 ) -> dict:
     """Return a compact summary of a PPO run: errors, tail, metric history."""
+
+    from ..pipeline.formatting import format_metric_history
 
     path = Path(log_path)
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""

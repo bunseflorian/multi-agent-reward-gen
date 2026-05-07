@@ -1,0 +1,71 @@
+# Central runtime config for qwen_agentv2.
+# Relative paths are resolved against paths.isaaclab_root.
+
+paths:
+  isaaclab_root: /home/florian/IsaacLab
+  qwen_agent_root: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2
+  default_env: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/environments/quadcopter_env_tracking.py
+  env_dir: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/environments
+  qwen_model: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/models/llm-qwen3.5-4B
+  runs_dir: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/runs
+  qwen_server_pid_file: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/.qwen_server.pid
+  qwen_server_log_file: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/runs/qwen_server.log
+  ppo_candidate_dir: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/runs/ppo_candidate
+  qwen_server_conda_env: qwen-vllm-server
+  isaaclab_conda_env: isaaclab
+  isaaclab_launcher: isaaclab.sh
+  rl_games_train_script: scripts/reinforcement_learning/rl_games/train.py
+
+llm:
+  base_url: http://localhost:8000/v1
+  model: Qwen/Qwen3.5-4B
+  api_key: EMPTY
+  timeout_seconds: 60.0
+  max_tokens: 2048
+  enable_thinking: false
+  non_reasoning:
+    temperature: 0.7
+    top_p: 0.8
+    top_k: 20
+    presence_penalty: 0.5
+    max_tokens: 2048
+    thinking_budget:
+  reasoning:
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
+    presence_penalty: 0.3
+    max_tokens: 6500
+    thinking_budget: 4096
+  debug: false
+
+server:
+  served_model_name: Qwen/Qwen3.5-4B
+  reasoning_parser: qwen3
+  reasoning_config: '{"reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
+  host: 127.0.0.1
+  port: 8000
+  max_model_len: 11776
+  gpu_memory_utilization: 0.85
+  max_num_seqs: 1
+  startup_timeout_seconds: 300
+
+pipeline:
+  max_iterations: 3
+  max_rl_iterations:
+  max_format_retries: 3
+
+ppo:
+  run_rl_training: false
+  num_envs: 4096
+  max_iterations: 150
+  timeout_seconds: 300
+  headless: true
+  task_id: qwen_agent_task
+  backend: rl_games
+
+ui:
+  objective: Minimize distance to the target position while maintaining low angular velocity.
+  max_static_iterations: 3
+  max_rl_reviewer_retries: 3
+  max_rl_iterations: 2

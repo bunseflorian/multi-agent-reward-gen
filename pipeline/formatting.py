@@ -6,7 +6,7 @@ from typing import Any
 
 
 def format_metric_history(metric_history: Any) -> str:
-    """Format a sampled PPO metric history as ``metric: [e1=..., e2=...]``.
+    """Format sampled PPO metric history as compact chronological value lists.
 
     Accepts the list of dicts produced by ``qwen_agentv2.ppo.summary``. Returns
     a compact, single-block string suitable for both Critic prompts and PPO
@@ -32,8 +32,7 @@ def format_metric_history(metric_history: Any) -> str:
         for point in metric_history:
             if not isinstance(point, dict) or metric_name not in point:
                 continue
-            episode = point.get("episode", "?")
-            values.append(f"e{episode}={_format_metric_value(point[metric_name])}")
+            values.append(_format_metric_value(point[metric_name]))
         lines.append(f"{metric_name}: [{', '.join(values)}]")
     return "\n".join(lines)
 
@@ -63,5 +62,5 @@ def format_ppo_live_log(report: Any) -> str:
 
 def _format_metric_value(value: Any) -> str:
     if isinstance(value, float):
-        return f"{value:.6g}"
+        return f"{value:.3f}"
     return str(value)

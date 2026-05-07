@@ -22,7 +22,7 @@ class QwenConfig:
     """Runtime settings for an OpenAI-compatible Qwen server.
 
     Values are populated by :func:`qwen_agentv2.llm.config.load_qwen_config`
-    from ``configs/llm_api_config.yaml`` plus ``QWEN_*`` environment overrides.
+    from ``configs/app.yaml`` plus ``QWEN_*`` environment overrides.
     """
 
     base_url: str

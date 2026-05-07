@@ -25,6 +25,7 @@ class RunStatus(str, Enum):
     FAILED_STATIC = "failed_static"
     FAILED_PLANNING = "failed_planning"
     FAILED_FORMAT = "failed_format"
+    REJECTED_PLAN = "rejected_plan"
 
 
 @dataclass(frozen=True)
@@ -84,19 +85,38 @@ TestReport.__test__ = False
 
 
 @dataclass(frozen=True)
+class RunHooks:
+    """Optional lifecycle hooks for UI/live integrations.
+
+    Run artifacts are recorded separately by the pipeline recorder; these hooks
+    should only drive live side effects such as Streamlit status updates or
+    pausing the local Qwen server before PPO.
+    """
+
+    status_callback: Callable[[str], None] | None = field(default=None, compare=False, repr=False)
+    ppo_progress_callback: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False, repr=False)
+    pre_training_callback: Callable[[], None] | None = field(default=None, compare=False, repr=False)
+    post_training_callback: Callable[[], None] | None = field(default=None, compare=False, repr=False)
+
+
+def _ppo_default(name: str) -> Any:
+    from ..configs import config_get
+
+    return config_get(f"ppo.{name}")
+
+
+@dataclass(frozen=True)
 class PPOConfig:
     """Runtime settings for optional PPO validation."""
 
-    run_rl_training: bool = False
-    num_envs: int | None = None
-    max_iterations: int | None = None
-    timeout_seconds: int | None = None
-    headless: bool = True
-    task_id: str = "qwen_agent_task"
-    backend: str = "rl_games"
-    progress_callback: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False, repr=False)
-    pre_training_callback: Callable[[], None] | None = field(default=None, compare=False, repr=False)
-    post_training_callback: Callable[[], None] | None = field(default=None, compare=False, repr=False)
+    run_rl_training: bool = field(default_factory=lambda: _ppo_default("run_rl_training"))
+    num_envs: int | None = field(default_factory=lambda: _ppo_default("num_envs"))
+    max_iterations: int | None = field(default_factory=lambda: _ppo_default("max_iterations"))
+    timeout_seconds: int | None = field(default_factory=lambda: _ppo_default("timeout_seconds"))
+    headless: bool = field(default_factory=lambda: _ppo_default("headless"))
+    task_id: str = field(default_factory=lambda: _ppo_default("task_id"))
+    backend: str = field(default_factory=lambda: _ppo_default("backend"))
+    hooks: RunHooks = field(default_factory=RunHooks, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -144,10 +164,12 @@ class RunState:
     task_brief: TaskBrief
     status: RunStatus = RunStatus.CREATED
     iterations: list[IterationRecord] = field(default_factory=list)
+    plan: PlanArtifact | None = None
     final_code: CodeArtifact | None = None
     final_report: TestReport | None = None
     final_ppo_report: PPOReport | None = None
     rl_training_skipped: bool = True
+    recorder: Any | None = field(default=None, repr=False, compare=False)
 
     @property
     def accepted(self) -> bool:

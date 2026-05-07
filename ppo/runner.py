@@ -11,9 +11,8 @@ import subprocess
 import time
 from pathlib import Path
 
-from ..configs import get_path, isaaclab_root as configured_isaaclab_root
+from ..configs import config_path
 from ..core import PPOConfig, PPOReport, TaskBrief
-from ..pipeline.env_patch import write_candidate_env
 from .command import QWEN_AGENT_EXPERIMENT_NAME, build_ppo_command
 from .summary import summarize_ppo_log
 
@@ -27,13 +26,15 @@ def run_ppo_validation(
 ) -> PPOReport:
     """Patch the candidate env, launch PPO, and return a structured report."""
 
-    root = Path(isaaclab_root) if isaaclab_root is not None else configured_isaaclab_root()
+    root = Path(isaaclab_root) if isaaclab_root is not None else config_path("paths.isaaclab_root")
     run_path = Path(run_dir)
     run_path.mkdir(parents=True, exist_ok=True)
 
-    candidate_root = get_path("runtime", "ppo_candidate_dir")
+    candidate_root = config_path("paths.ppo_candidate_dir")
     candidate_root.mkdir(parents=True, exist_ok=True)
     _clear_candidate_env(candidate_root)
+    from ..pipeline.env_patch import write_candidate_env
+
     candidate_path = write_candidate_env(task_brief.env_source_path, reward_code, candidate_root)
 
     rl_games_root = root / "logs" / "rl_games"
@@ -176,8 +177,8 @@ def _run_command_with_progress(
 
 
 def _emit_progress(config: PPOConfig, payload: dict) -> None:
-    if config.progress_callback is not None:
-        config.progress_callback(payload)
+    if config.hooks.ppo_progress_callback is not None:
+        config.hooks.ppo_progress_callback(payload)
 
 
 def _terminate_process_group(process: subprocess.Popen) -> None:

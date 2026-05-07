@@ -195,8 +195,10 @@ class QuadcopterEnv(DirectRLEnv):
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
-        return self._compute_generated_reward()
-
+        # State update logic here
+        reward = self._compute_generated_reward()
+        # State update logic here
+        return reward
     def _compute_generated_reward(self) -> torch.Tensor:
         # QWEN-GENERATED REWARD FUNCTION
 

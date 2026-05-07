@@ -13,10 +13,7 @@ from .server_control import (
     SERVER_PID_FILE,
     build_server_command,
     launch_in_background,
-    load_persisted_server_settings,
-    persist_server_settings,
     read_log_tail,
-    reset_persisted_server_settings,
     stop_server,
 )
 
@@ -24,11 +21,9 @@ from .server_control import (
 def render_sidebar(st, default_settings: QwenServerSettings) -> tuple[QwenServerSettings, str, list[str]]:
     """Return ``(settings, base_url, server_command)`` after rendering the sidebar."""
 
-    effective_defaults = load_persisted_server_settings(default_settings)
-
     with st.sidebar:
         st.header("Server")
-        settings = _settings_inputs(st, effective_defaults)
+        settings = _settings_inputs(st, default_settings)
         base_url = settings.base_url
         os.environ["QWEN_BASE_URL"] = base_url
         os.environ["QWEN_MODEL"] = settings.served_model_name
@@ -68,12 +63,15 @@ def _settings_inputs(st, default_settings: QwenServerSettings) -> QwenServerSett
         project_root=PROJECT_ROOT,
         model_path=mp if mp.is_absolute() else (PROJECT_ROOT / mp).expanduser(),
         served_model_name=served_model_name,
+        reasoning_parser=default_settings.reasoning_parser,
+        reasoning_config=default_settings.reasoning_config,
         host=host,
         port=int(port),
         max_model_len=int(max_model_len),
         gpu_memory_utilization=float(gpu_mem),
         max_num_seqs=int(max_num_seqs),
         startup_timeout_seconds=default_settings.startup_timeout_seconds,
+        pid_file=default_settings.pid_file,
     )
 
 
@@ -87,7 +85,6 @@ def _reachability_indicator(st, base_url: str) -> None:
 def _server_control_buttons(st, settings: QwenServerSettings, server_command: list[str]) -> None:
     if st.button("Start server", use_container_width=True):
         try:
-            persist_server_settings(settings)
             launch_in_background(server_command, log_file=SERVER_LOG_FILE)
             st.success("Server startet")
         except Exception as exc:
@@ -95,7 +92,6 @@ def _server_control_buttons(st, settings: QwenServerSettings, server_command: li
 
     if st.button("Stop server", use_container_width=True):
         try:
-            reset_persisted_server_settings()
             stopped_pid = stop_server()
             if stopped_pid is None:
                 st.warning("No server PID file found.")

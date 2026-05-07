@@ -20,10 +20,10 @@ class TesterAgent:
             return skipped_ppo_report()
         if run_dir is None:
             raise ValueError("run_dir is required when RL training is enabled.")
-        if ppo_config.pre_training_callback is not None:
-            ppo_config.pre_training_callback()
+        if ppo_config.hooks.pre_training_callback is not None:
+            ppo_config.hooks.pre_training_callback()
         try:
             return run_ppo_validation(task_brief, code_artifact.code, run_dir, ppo_config)
         finally:
-            if ppo_config.post_training_callback is not None:
-                ppo_config.post_training_callback()
+            if ppo_config.hooks.post_training_callback is not None:
+                ppo_config.hooks.post_training_callback()

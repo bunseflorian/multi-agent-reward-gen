@@ -1,3 +1,8 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import gymnasium as gym
@@ -14,6 +19,9 @@ from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 
+##
+# Pre-defined configs
+##
 from isaaclab_assets import CRAZYFLIE_CFG  # isort: skip
 from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
 
@@ -22,10 +30,19 @@ class QuadcopterWaypointEnvWindow(BaseEnvWindow):
     """Window manager for the waypoint quadcopter environment."""
 
     def __init__(self, env: "QuadcopterWaypointEnv", window_name: str = "IsaacLab"):
+        """Initialize the window.
+
+        Args:
+            env: The environment object.
+            window_name: The name of the window. Defaults to "IsaacLab".
+        """
+        # initialize base window
         super().__init__(env, window_name)
+        # add custom UI elements
         with self.ui_window_elements["main_vstack"]:
             with self.ui_window_elements["debug_frame"]:
                 with self.ui_window_elements["debug_vstack"]:
+                    # add command manager visualization
                     self._create_debug_vis_ui_element("targets", self.env)
 
 
@@ -35,7 +52,7 @@ class QuadcopterWaypointEnvCfg(DirectRLEnvCfg):
     episode_length_s = 16.0
     decimation = 2
     action_space = 4
-    observation_space = 15
+    observation_space = 14
     state_space = 0
     debug_vis = True
 
@@ -60,7 +77,6 @@ class QuadcopterWaypointEnvCfg(DirectRLEnvCfg):
             restitution=0.0,
         ),
     )
-
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",
@@ -77,10 +93,7 @@ class QuadcopterWaypointEnvCfg(DirectRLEnvCfg):
 
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=4096,
-        env_spacing=2.5,
-        replicate_physics=True,
-        clone_in_fabric=True,
+        num_envs=4096, env_spacing=2.5, replicate_physics=True, clone_in_fabric=True
     )
 
     # robot
@@ -95,25 +108,28 @@ class QuadcopterWaypointEnv(DirectRLEnv):
     def __init__(self, cfg: QuadcopterWaypointEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
-        self._actions = torch.zeros(
-            self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device
-        )
-        self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
+        # Actions and applied forces (actions -> thrust/moment).
+        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
+        self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
 
-        # waypoint storage
-        self._waypoints_w = torch.zeros(
-            self.num_envs, self.cfg.num_waypoints, 3, device=self.device
-        )
-        self._current_waypoint_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # Waypoint task state (world frame).
+        self._waypoints_w = torch.zeros(self.num_envs, self.cfg.num_waypoints, 3, device=self.device)
         self._active_waypoint_w = torch.zeros(self.num_envs, 3, device=self.device)
+        self._current_waypoint_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._waypoints_completed = torch.zeros(self.num_envs, device=self.device)
+        self._waypoint_progress = torch.zeros(self.num_envs, device=self.device)
+        self._distance_to_waypoint = torch.zeros(self.num_envs, device=self.device)
+        self._waypoint_reached = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._task_success = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
+        # Robot physical parameters.
         self._body_id = self._robot.find_bodies("body")[0]
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
         self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
 
+        # Debug visualization (set to a valid handle inside set_debug_vis).
         self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
@@ -123,80 +139,64 @@ class QuadcopterWaypointEnv(DirectRLEnv):
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
-
+        # clone and replicate
         self.scene.clone_environments(copy_from_source=False)
-
+        # we need to explicitly filter collisions for CPU simulation
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
-
+        # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        self._thrust[:, 0, 2] = (
-            self.cfg.thrust_to_weight * self._robot_weight * (self._actions[:, 0] + 1.0) / 2.0
-        )
+        self._thrust[:, 0, 2] = self.cfg.thrust_to_weight * self._robot_weight * (self._actions[:, 0] + 1.0) / 2.0
         self._moment[:, 0, :] = self.cfg.moment_scale * self._actions[:, 1:]
 
     def _apply_action(self):
-        self._robot.set_external_force_and_torque(
-            self._thrust, self._moment, body_ids=self._body_id
-        )
+        self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
 
     def _get_observations(self) -> dict:
-
-        # --- compute and STORE everything in self.* ---
-
-        # relative waypoint position
-        self._desired_pos_b, _ = subtract_frame_transforms(
-            self._robot.data.root_pos_w,
-            self._robot.data.root_quat_w,
-            self._active_waypoint_w,
+        active_waypoint_b, _ = subtract_frame_transforms(
+            self._robot.data.root_pos_w, self._robot.data.root_quat_w, self._active_waypoint_w
         )
-
-        # waypoint progress
-        self._waypoint_progress = (
-            self._current_waypoint_idx.float().unsqueeze(-1)
-            / max(self.cfg.num_waypoints - 1, 1)
-        )
-
-        # success flag
-        self._success_flag = self._task_success.float().unsqueeze(-1)
-
-        # optional padding (falls du fixe Größe willst)
-        self._obs_padding = torch.ones((self.num_envs, 1), device=self.device)
-
-        # --- build observation ONLY from self.* ---
-
         obs = torch.cat(
             [
                 self._robot.data.root_lin_vel_b,
                 self._robot.data.root_ang_vel_b,
                 self._robot.data.projected_gravity_b,
-                self._desired_pos_b,
-                self._waypoint_progress,
-                self._success_flag,
-                self._obs_padding,
+                active_waypoint_b,
+                self._waypoint_progress.unsqueeze(-1),
+                self._task_success.float().unsqueeze(-1),
             ],
             dim=-1,
         )
-
-        return {"policy": obs}
+        observations = {"policy": obs}
+        return observations
 
     def _get_rewards(self) -> torch.Tensor:
-        distance = torch.norm(self._robot.data.root_pos_w - self._active_waypoint_w, dim=-1)
-        reached = torch.logical_and(distance <= self.cfg.waypoint_reached_threshold, ~self._task_success)
-        final_waypoint = self._current_waypoint_idx >= self.cfg.num_waypoints - 1
+        # Update waypoint state before evaluating the generated reward.
+        distance_to_previous_waypoint = torch.norm(self._robot.data.root_pos_w - self._active_waypoint_w, dim=-1)
+        self._waypoint_reached = torch.logical_and(
+            distance_to_previous_waypoint <= self.cfg.waypoint_reached_threshold, ~self._task_success
+        )
 
-        self._task_success = torch.logical_or(self._task_success, torch.logical_and(reached, final_waypoint))
-        next_idx = torch.clamp(self._current_waypoint_idx + reached.long(), max=self.cfg.num_waypoints - 1)
-        self._current_waypoint_idx = torch.where(self._task_success, self._current_waypoint_idx, next_idx)
+        next_waypoint_idx = self._current_waypoint_idx + self._waypoint_reached.long()
+        self._task_success = torch.logical_or(self._task_success, next_waypoint_idx >= self.cfg.num_waypoints)
+        self._current_waypoint_idx = torch.clamp(next_waypoint_idx, max=self.cfg.num_waypoints - 1)
+        self._waypoints_completed = torch.where(
+            self._task_success,
+            torch.full_like(self._waypoints_completed, float(self.cfg.num_waypoints)),
+            self._current_waypoint_idx.float(),
+        )
+        self._waypoint_progress = self._waypoints_completed / float(self.cfg.num_waypoints)
         self._active_waypoint_w = self._waypoints_w[
-            torch.arange(self.num_envs, device=self.device),
-            self._current_waypoint_idx,
+            torch.arange(self.num_envs, device=self.device), self._current_waypoint_idx
         ]
-        return self._compute_generated_reward()
+        self._distance_to_waypoint = torch.norm(self._robot.data.root_pos_w - self._active_waypoint_w, dim=-1)
+
+        reward = self._compute_generated_reward()
+        return reward
 
     def _compute_generated_reward(self) -> torch.Tensor:
         # QWEN-GENERATED REWARD FUNCTION
@@ -206,15 +206,15 @@ class QuadcopterWaypointEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
 
-        out_of_bounds = torch.logical_or(
+        task_success = self._task_success
+        crash = torch.logical_or(
             self._robot.data.root_pos_w[:, 2] < 0.1,
-            self._robot.data.root_pos_w[:, 2] > 2.5,
+            self._robot.data.root_pos_w[:, 2] > 2.0,
         )
 
-        success_done = self._task_success.clone()
-        died = torch.logical_or(out_of_bounds, success_done)
-
-        return died, time_out
+        terminated = torch.logical_or(task_success, crash)
+        return terminated, time_out
+    
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
@@ -222,21 +222,21 @@ class QuadcopterWaypointEnv(DirectRLEnv):
 
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
-
         if len(env_ids) == self.num_envs:
-            self.episode_length_buf = torch.randint_like(
-                self.episode_length_buf, high=int(self.max_episode_length)
-            )
+            # Spread out the resets to avoid spikes in training when many environments reset at a similar time
+            self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
 
+        # Reset per-env state + sample a new waypoint sequence.
         self._actions[env_ids] = 0.0
-        self._task_success[env_ids] = False
         self._current_waypoint_idx[env_ids] = 0
-
-        # sample waypoint sequence
+        self._waypoints_completed[env_ids] = 0.0
+        self._waypoint_progress[env_ids] = 0.0
+        self._distance_to_waypoint[env_ids] = 0.0
+        self._waypoint_reached[env_ids] = False
+        self._task_success[env_ids] = False
         self._sample_waypoints(env_ids)
         self._active_waypoint_w[env_ids] = self._waypoints_w[env_ids, 0]
 
-        # reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids].clone()
@@ -247,26 +247,22 @@ class QuadcopterWaypointEnv(DirectRLEnv):
 
     def _sample_waypoints(self, env_ids: torch.Tensor):
         num_resets = len(env_ids)
-
-        xy = torch.empty(
-            num_resets, self.cfg.num_waypoints, 2, device=self.device
-        ).uniform_(-self.cfg.waypoint_xy_range, self.cfg.waypoint_xy_range)
-
-        z = torch.empty(
-            num_resets, self.cfg.num_waypoints, 1, device=self.device
-        ).uniform_(self.cfg.waypoint_z_min, self.cfg.waypoint_z_max)
-
+        xy = torch.empty(num_resets, self.cfg.num_waypoints, 2, device=self.device).uniform_(
+            -self.cfg.waypoint_xy_range, self.cfg.waypoint_xy_range
+        )
+        z = torch.empty(num_resets, self.cfg.num_waypoints, 1, device=self.device).uniform_(
+            self.cfg.waypoint_z_min, self.cfg.waypoint_z_max
+        )
         waypoints = torch.cat([xy, z], dim=-1)
         waypoints[:, :, :2] += self._terrain.env_origins[env_ids, None, :2]
-
         self._waypoints_w[env_ids] = waypoints
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
             if not hasattr(self, "goal_pos_visualizer"):
                 marker_cfg = CUBOID_MARKER_CFG.copy()
-                marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
                 marker_cfg.prim_path = "/Visuals/Command/goal_position"
+                marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
                 self.goal_pos_visualizer = VisualizationMarkers(marker_cfg)
             self.goal_pos_visualizer.set_visibility(True)
         else:
@@ -274,4 +270,5 @@ class QuadcopterWaypointEnv(DirectRLEnv):
                 self.goal_pos_visualizer.set_visibility(False)
 
     def _debug_vis_callback(self, event):
-        self.goal_pos_visualizer.visualize(self._active_waypoint_w)
+        if hasattr(self, "goal_pos_visualizer"):
+            self.goal_pos_visualizer.visualize(self._active_waypoint_w)

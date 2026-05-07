@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..configs import build_ppo_config
 from ..cli.run import run_task
-from ..core import PPOConfig, RunStatus
-from ..pipeline import run_dir_name, save_run_state
+from ..core import PPOConfig, RunHooks, RunStatus
+from ..pipeline import run_dir_name
 from ..server import QwenServerSettings
 from .server_control import (
     SERVER_LOG_FILE,
@@ -26,7 +27,106 @@ def run_generation(
     default_settings: QwenServerSettings,
     form: TaskFormValues,
 ) -> None:
-    """Run the multi-agent pipeline and render the outcome in Streamlit."""
+    """Run the Planner and leave the generated plan pending for UI approval."""
+
+    tmp_run_dir = form.output_dir / f"_running_{form.env_path.stem}"
+    tmp_run_dir.mkdir(parents=True, exist_ok=True)
+    status_placeholder = st.empty()
+
+    def _update_status(agent: str) -> None:
+        status_placeholder.info(f"Running: **{agent}**")
+
+    try:
+        state = run_task(
+            max_iterations=form.max_iterations,
+            max_rl_iterations=form.max_rl_iterations,
+            env_path=form.env_path,
+            objective=form.objective,
+            ppo_config=_build_ppo_config(form, hooks=RunHooks()),
+            run_dir=tmp_run_dir,
+            agent_reasoning=form.agent_reasoning,
+            status_callback=_update_status,
+            stop_after_plan=True,
+        )
+        status_placeholder.empty()
+    except Exception as exc:
+        status_placeholder.empty()
+        st.error(str(exc))
+        return
+
+    st.session_state["pending_plan_run"] = {
+        "state": state,
+        "form": form,
+        "run_dir": tmp_run_dir,
+    }
+    render_pending_plan(
+        st,
+        base_url=base_url,
+        server_command=server_command,
+        default_settings=default_settings,
+    )
+
+
+def render_pending_plan(
+    st,
+    *,
+    base_url: str,
+    server_command: list[str],
+    default_settings: QwenServerSettings,
+) -> bool:
+    """Render Accept/Reject controls for a plan created in a previous UI run."""
+
+    pending = st.session_state.get("pending_plan_run")
+    if not pending:
+        return False
+
+    state = pending["state"]
+    plan = state.plan
+    if plan is None:
+        st.warning("Pending run has no planner output.")
+        return True
+
+    st.subheader("Planner Output")
+    st.write(f"Run directory: `{pending['run_dir']}`")
+    st.code(plan.text, language="text")
+
+    accept_col, reject_col = st.columns(2)
+    with accept_col:
+        accept = st.button("Accept plan and continue", type="primary", use_container_width=True)
+    with reject_col:
+        reject = st.button("Reject plan", use_container_width=True)
+
+    if reject:
+        _reject_pending_plan(st, pending)
+        return True
+
+    if accept:
+        if not wait_for_server(base_url, 2, ready=True):
+            st.error(f"Qwen server is not reachable at {base_url}. Start it first.")
+            return True
+        _continue_pending_plan(
+            st,
+            pending,
+            base_url=base_url,
+            server_command=server_command,
+            default_settings=default_settings,
+        )
+        return True
+
+    return True
+
+
+def _continue_pending_plan(
+    st,
+    pending: dict,
+    *,
+    base_url: str,
+    server_command: list[str],
+    default_settings: QwenServerSettings,
+) -> None:
+    form: TaskFormValues = pending["form"]
+    planned_state = pending["state"]
+    tmp_run_dir: Path = pending["run_dir"]
 
     progress_box = st.empty()
     log_box = st.empty()
@@ -49,6 +149,9 @@ def run_generation(
         with tensorboard_box.container():
             render_tensorboard_metrics(st, tmp_run_dir, live_event=event)
 
+    def _update_status(agent: str) -> None:
+        status_placeholder.info(f"Running: **{agent}**")
+
     def pause_qwen() -> None:
         show_ppo_progress({"status": "qwen_stopping", "message": "Stopping Qwen server before PPO to free GPU memory"})
         stopped_pid = stop_server()
@@ -66,12 +169,7 @@ def run_generation(
             raise RuntimeError("Qwen server did not become ready after PPO.")
         show_ppo_progress({"status": "qwen_ready", "message": f"Qwen server ready again at {base_url}"})
 
-    tmp_run_dir = form.output_dir / f"_running_{form.env_path.stem}"
-    tmp_run_dir.mkdir(parents=True, exist_ok=True)
     status_placeholder = st.empty()
-
-    def _update_status(agent: str) -> None:
-        status_placeholder.info(f"Running: **{agent}**")
 
     try:
         state = run_task(
@@ -79,31 +177,68 @@ def run_generation(
             max_rl_iterations=form.max_rl_iterations,
             env_path=form.env_path,
             objective=form.objective,
-            ppo_config=PPOConfig(
+            ppo_config=build_ppo_config(
                 run_rl_training=form.run_rl,
                 num_envs=form.ppo_kwargs.get("num_envs"),
                 max_iterations=form.ppo_kwargs.get("max_iterations"),
                 timeout_seconds=form.ppo_kwargs.get("timeout_seconds"),
                 headless=form.ppo_kwargs.get("headless", True),
-                progress_callback=show_ppo_progress if form.run_rl else None,
-                pre_training_callback=pause_qwen if form.run_rl else None,
-                post_training_callback=resume_qwen if form.run_rl else None,
+                hooks=RunHooks(
+                    ppo_progress_callback=show_ppo_progress if form.run_rl else None,
+                    pre_training_callback=pause_qwen if form.run_rl else None,
+                    post_training_callback=resume_qwen if form.run_rl else None,
+                ),
             ),
             run_dir=tmp_run_dir,
             agent_reasoning=form.agent_reasoning,
             status_callback=_update_status,
+            initial_plan=planned_state.plan,
         )
         status_placeholder.empty()
         final_run_dir = form.output_dir / run_dir_name(state)
         tmp_run_dir.rename(final_run_dir)
-        save_run_state(state, run_dir=final_run_dir)
+        state.recorder.move_to(final_run_dir)
+        state.recorder.save_run_state(state)
         run_dir = final_run_dir
+        st.session_state.pop("pending_plan_run", None)
     except Exception as exc:
         status_placeholder.empty()
         st.error(str(exc))
         return
 
     _render_result(st, state=state, run_dir=run_dir, run_rl=form.run_rl)
+
+
+def _reject_pending_plan(st, pending: dict) -> None:
+    state = pending["state"]
+    tmp_run_dir: Path = pending["run_dir"]
+    form: TaskFormValues = pending["form"]
+
+    state.status = RunStatus.REJECTED_PLAN
+    if state.recorder is not None:
+        state.recorder.event("plan_rejected")
+        state.recorder.event("run_finished", status=state.status.value, accepted=state.accepted)
+        state.recorder.save_run_state(state)
+
+    final_run_dir = form.output_dir / run_dir_name(state)
+    tmp_run_dir.rename(final_run_dir)
+    if state.recorder is not None:
+        state.recorder.move_to(final_run_dir)
+        state.recorder.save_run_state(state)
+
+    st.session_state.pop("pending_plan_run", None)
+    st.info(f"Plan rejected. Run saved to `{final_run_dir}`.")
+
+
+def _build_ppo_config(form: TaskFormValues, *, hooks: RunHooks) -> PPOConfig:
+    return build_ppo_config(
+        run_rl_training=form.run_rl,
+        num_envs=form.ppo_kwargs.get("num_envs"),
+        max_iterations=form.ppo_kwargs.get("max_iterations"),
+        timeout_seconds=form.ppo_kwargs.get("timeout_seconds"),
+        headless=form.ppo_kwargs.get("headless", True),
+        hooks=hooks,
+    )
 
 
 def _render_result(st, *, state, run_dir: Path, run_rl: bool) -> None:

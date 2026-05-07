@@ -13,12 +13,6 @@ from dataclasses import dataclass
 
 _THINK_RE = re.compile(r".*?</(?:think|thinking)>", re.IGNORECASE | re.DOTALL)
 _THINK_CLOSE_RE = re.compile(r"</(?:think|thinking)>", re.IGNORECASE)
-_FINAL_ANSWER_TAG = r"<final(?:[ _]+)answer>"
-_FINAL_ANSWER_CLOSE_TAG = r"</final(?:[ _]+)answer>"
-_FINAL_ANSWER_RE = re.compile(
-    rf"{_FINAL_ANSWER_TAG}\s*(.*?)\s*{_FINAL_ANSWER_CLOSE_TAG}",
-    re.IGNORECASE | re.DOTALL,
-)
 _CODE_BLOCK_RE = re.compile(r"```(?P<lang>[a-zA-Z0-9_+-]*)\s*\n(?P<code>.*?)```", re.DOTALL)
 
 _PLANNER_FINAL_ANSWER_ERROR = "Planner output format error Increase output size or try again."
@@ -38,32 +32,19 @@ class ParsedRewardCode:
 
 
 def extract_final_answer(raw_response: str) -> str:
-    """Return the content inside the last ``<final answer>...</final answer>``.
+    """Return text-agent output with thinking blocks stripped."""
 
-    Thinking blocks are stripped first. Falls back to the full stripped
-    response when no tag is present, so callers stay robust.
-    """
-
-    stripped = _THINK_RE.sub("", raw_response).strip()
-    matches = list(_FINAL_ANSWER_RE.finditer(stripped))
-    if matches:
-        return matches[-1].group(1).strip()
-    return stripped
+    return _THINK_RE.sub("", raw_response).strip()
 
 
 def require_final_answer_terminator(raw_response: str, agent_name: str) -> None:
-    """Raise when a text-agent response is missing its ``</final answer>``."""
-
-    stripped = raw_response.strip()
-    normalized = stripped.lower()
-    if not normalized.endswith(("</final answer>", "</final_answer>")) or not list(_FINAL_ANSWER_RE.finditer(stripped)):
-        raise ValueError(_format_error(agent_name))
+    """No-op compatibility shim for text-agent output validation."""
+    return None
 
 
 def require_code_block_terminator(raw_response: str, agent_name: str) -> None:
     """Raise when a code-agent response does not end with a closed fenced code block."""
 
-    _require_closed_thinking(raw_response, agent_name)
     stripped = _THINK_RE.sub("", raw_response).strip()
     if not stripped.endswith("```"):
         raise ValueError(_format_error(agent_name))
@@ -94,16 +75,11 @@ def extract_logged_output(raw_response: str) -> str:
     """Return the preferred output content for ``conversation.md``.
 
     Preference order:
-    1. last ``<final answer>...</final answer>`` block
-    2. last fenced Python code block
-    3. whole response with thinking blocks stripped
+    1. last fenced Python code block
+    2. whole response with thinking blocks stripped
     """
 
     stripped = _THINK_RE.sub("", raw_response).strip()
-    matches = list(_FINAL_ANSWER_RE.finditer(stripped))
-    if matches:
-        return matches[-1].group(1).strip()
-
     python_blocks = [
         match.group("code").strip()
         for match in _CODE_BLOCK_RE.finditer(stripped)
@@ -113,10 +89,6 @@ def extract_logged_output(raw_response: str) -> str:
         return python_blocks[-1]
 
     return stripped
-
-
-def _require_closed_thinking(raw_response: str, agent_name: str) -> None:
-    return None
 
 
 def _extract_thinking_content(block: str) -> str:
@@ -145,16 +117,33 @@ def extract_plan_bullets(text: str) -> list[str]:
     return bullets
 
 
-def extract_plan_usable_tensors(plan_text: str) -> list[str]:
-    """Return tensor allowlist entries from the planner's usable-tensor section."""
+def extract_plan_tensor_contract(plan_text: str) -> list[str]:
+    """Return tensor contract entries from the planner output.
+
+    The Planner emits a compact ``Signal contract``. The first tensor on each
+    line is the planned signal; additional ``self.*`` references on the same
+    line are source tensors from ``derived from:``.
+    """
+
+    return _extract_plan_tensor_section(plan_text, "signal contract")
+
+
+def _extract_plan_tensor_section(
+    plan_text: str,
+    section_name: str,
+) -> list[str]:
+    """Return self.* entries from a planner tensor section."""
 
     entries: list[str] = []
     in_section = False
     for line in plan_text.splitlines():
         stripped = line.strip()
-        if stripped.lower().startswith("usable tensors for coder"):
+        header = stripped.lstrip("#").strip().rstrip(":").lower()
+        if header.startswith(section_name):
             in_section = True
             continue
+        if in_section and stripped.startswith("#"):
+            break
         if in_section and stripped.endswith(":") and not stripped.startswith(("- ", "* ")):
             break
         if not in_section or not stripped.startswith(("- ", "* ")):
@@ -169,6 +158,10 @@ def extract_plan_usable_tensors(plan_text: str) -> list[str]:
         if match.group(2):
             entry = f"{entry} {match.group(2)}"
         entries.append(entry)
+        for ref in re.finditer(r"self\.[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*", stripped):
+            path = ref.group(0)
+            if path != match.group(1) and path not in entries:
+                entries.append(path)
     return entries
 
 

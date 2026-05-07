@@ -107,6 +107,13 @@ class QuadcopterEnv(DirectRLEnv):
         # Goal position
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
 
+        # Success tracking: cumulative steps within success_dist of the target.
+        self._success_dist = 0.2
+        self._success_steps_required = int(0.8 * self.max_episode_length)
+        self._dist_to_target = torch.zeros(self.num_envs, device=self.device)
+        self._close_step_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self._success = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+
         # Get specific body indices
         self._body_id = self._robot.find_bodies("body")[0]
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
@@ -157,6 +164,10 @@ class QuadcopterEnv(DirectRLEnv):
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
+        self._dist_to_target = torch.norm(self._robot.data.root_pos_w - self._desired_pos_w, dim=-1)
+        close = self._dist_to_target < self._success_dist
+        self._close_step_count = torch.where(close, self._close_step_count + 1, self._close_step_count)
+        self._success = self._close_step_count >= self._success_steps_required
         return self._compute_generated_reward()
 
     def _compute_generated_reward(self) -> torch.Tensor:
@@ -167,7 +178,8 @@ class QuadcopterEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
-        return died, time_out
+        terminated = torch.logical_or(died, self._success)
+        return terminated, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
@@ -180,6 +192,8 @@ class QuadcopterEnv(DirectRLEnv):
             self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
 
         self._actions[env_ids] = 0.0
+        self._close_step_count[env_ids] = 0
+        self._success[env_ids] = False
         # Sample new commands
         self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
         self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]

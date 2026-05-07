@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from ..core import CodeArtifact, CritiqueArtifact, PlanArtifact, PPOReport, TaskBrief
+from ..core import CodeArtifact, CritiqueArtifact, PlanArtifact, PPOReport
 from ..llm import QwenClient
-from ..llm.parsers import critic_requests_revision, extract_final_answer, require_final_answer_terminator
-from .logger import LiveLogger, null_logger
+from ..llm.parsers import critic_requests_revision, extract_final_answer
+from .logger import RunRecorder, null_logger
 from .prompts import CRITIC_SYSTEM_PROMPT, build_critic_prompt
 
 
@@ -17,7 +17,7 @@ class CriticAgent:
         client: QwenClient,
         *,
         enable_thinking: bool = False,
-        logger: LiveLogger | None = None,
+        logger: RunRecorder | None = None,
     ):
         self.client = client
         self.enable_thinking = enable_thinking
@@ -25,7 +25,6 @@ class CriticAgent:
 
     def critique(
         self,
-        task_brief: TaskBrief,
         plan: PlanArtifact,
         code: CodeArtifact,
         ppo_report: PPOReport | None = None,
@@ -37,7 +36,7 @@ class CriticAgent:
                 metadata={"agent": "critic", "source": "ppo_not_run", "skipped": True},
             )
 
-        prompt = build_critic_prompt(task_brief, plan, code, ppo_report)
+        prompt = build_critic_prompt(plan, code, ppo_report)
         self.logger.log_full(prompt, agent="critic", kind="input")
 
         agent_output = self.client.generate_text(
@@ -48,9 +47,8 @@ class CriticAgent:
         )
         self.logger.log_full(agent_output, agent="critic", kind="output")
 
-        require_final_answer_terminator(agent_output, "Critic")
         feedback = extract_final_answer(agent_output)
-        self.logger.log_output(agent_output, agent="critic")
+        self.logger.log_output(agent_output, agent="critic", extract=False)
 
         return CritiqueArtifact(
             feedback=feedback,

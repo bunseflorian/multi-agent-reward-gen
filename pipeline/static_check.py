@@ -1,11 +1,22 @@
-"""Static + mock-runtime validation for generated reward code.
+"""Fast validation for LLM-generated reward code, run before PPO training.
 
-Runs in three passes:
+Two passes:
 
-1. ``ast.parse`` (syntax sanity).
-2. AST walks for forbidden imports, forbidden calls, and shape anti-patterns.
-3. Mock execution against a minimal ``torch`` namespace to catch runtime
-   shape/dtype mistakes in reward and metric tensors.
+1. AST pass: parse the source, extract the ``self.*`` attributes actually used
+   by the generated code, reject forbidden imports/calls/attributes, require a
+   ``reward =`` assignment, enforce the Planner tensor contract, and flag
+   LLM-specific anti-patterns (Python conditionals on batched tensors,
+   ``tensor[:, idx, :]`` indexing, bare ``num_envs``, ``keepdim=True``, method
+   calls on ``self.cfg`` scalars, ``torch.dot``).
+
+2. Mock execution: build a ``self`` namespace for the used ``self.*`` paths,
+   using Planner ``[shape: (N, ...)]`` hints when available, ``exec`` the code
+   against a minimal ``torch`` + ``builtins`` globals dict, and verify that
+   ``reward`` is a finite ``(num_envs,)`` tensor and that any logged metrics are
+   per-environment floating-point tensors.
+
+Catches shape and dtype mistakes in under a second so they don't surface
+during the far more expensive PPO validation in ``tester.py``.
 """
 
 from __future__ import annotations
@@ -57,24 +68,27 @@ ISAACLAB_TENSOR_SPECS: dict[str, tuple[int, ...]] = {
 def static_check(
     code: str,
     allowed_tensors: list[str] | None = None,
-    num_envs: int = 8,
 ) -> TestReport:
     """Validate reward code with an AST pass and a mock torch execution."""
 
+    num_envs = 8
     errors: list[str] = []
     warnings: list[str] = []
 
     tree = _parse(code, errors)
+    used_self_paths: list[str] = []
     if tree is not None:
         _validate_ast(tree, errors, code)
         _check_reward_assignment(tree, errors)
+        _check_reward_term_logging(tree, errors)
+        used_self_paths = sorted(_used_reward_self_paths(tree))
         if allowed_tensors is not None:
-            _validate_self_attrs(tree, allowed_tensors, errors)
+            _validate_self_attrs(used_self_paths, allowed_tensors, errors)
     if errors:
         return TestReport(False, errors=errors, warnings=warnings, metadata={"stage": "ast"})
 
     try:
-        namespace = _mock_namespace(num_envs, allowed_tensors)
+        namespace = _mock_namespace(num_envs, used_self_paths, allowed_tensors)
         exec(compile(code, "<generated_reward>", "exec"), _safe_globals(), namespace)
     except ImportError as exc:
         return TestReport(False, errors=[f"torch is required for mock tensor tests: {exc}"])
@@ -198,16 +212,68 @@ def _check_reward_assignment(tree: ast.Module, errors: list[str]) -> None:
     )
 
 
-def _validate_self_attrs(tree: ast.Module, allowed_tensors: list[str], errors: list[str]) -> None:
+def _check_reward_term_logging(tree: ast.Module, errors: list[str]) -> None:
+    """Require every named reward component in ``reward = ...`` to be summed."""
+
+    component_names = _reward_component_names(tree)
+    if not component_names:
+        return
+    logged = _reward_term_logged_names(tree)
+    missing = sorted(name for name in component_names if name not in logged)
+    if missing:
+        expected = ", ".join(f"final_reward_term_{name}" for name in missing)
+        errors.append(
+            "Reward component logging is incomplete. Accumulate every named component from "
+            f"the final reward expression in self._episode_final_values; missing: {expected}."
+        )
+
+
+def _reward_component_names(tree: ast.Module) -> set[str]:
+    reward_assigns = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "reward" for target in node.targets)
+    ]
+    if not reward_assigns:
+        return set()
+    value = reward_assigns[-1].value
+    return {
+        node.id
+        for node in ast.walk(value)
+        if isinstance(node, ast.Name) and node.id not in {"reward", "torch"}
+    }
+
+
+def _reward_term_logged_names(tree: ast.Module) -> set[str]:
+    logged: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AugAssign) or not isinstance(node.op, ast.Add):
+            continue
+        key = _reward_term_key(node.target)
+        if key is not None and key.startswith("final_reward_term_"):
+            logged.add(key.removeprefix("final_reward_term_"))
+    return logged
+
+
+def _reward_term_key(target: ast.AST) -> str | None:
+    if not isinstance(target, ast.Subscript):
+        return None
+    if _dotted_name(target.value) != "self._episode_final_values":
+        return None
+    key_node = target.slice
+    if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+        return key_node.value
+    return None
+
+
+def _validate_self_attrs(used_paths: list[str], allowed_tensors: list[str], errors: list[str]) -> None:
     allowed = {_normalize_tensor_entry(entry) for entry in allowed_tensors}
     allowed.discard("")
 
-    for path in sorted(_self_leaf_paths(tree)):
-        if _is_base_self_path(path):
-            continue
+    for path in used_paths:
         if any(path == item or path.startswith(item + ".") for item in allowed):
             continue
-        errors.append(f"Illegal self attribute: 'self.{path}' is not listed in Planner usable tensors.")
+        errors.append(f"Illegal self attribute: 'self.{path}' is not listed in the Planner tensor contract.")
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +285,15 @@ def _safe_globals() -> dict[str, Any]:
     return {"__builtins__": builtins, "torch": torch}
 
 
-def _mock_namespace(num_envs: int, allowed_tensors: list[str] | None) -> dict[str, Any]:
+def _mock_namespace(
+    num_envs: int,
+    used_self_paths: list[str],
+    shape_entries: list[str] | None,
+) -> dict[str, Any]:
     import torch
 
     specs = dict(ISAACLAB_TENSOR_SPECS)
-    specs.update(_shape_specs_from_entries(allowed_tensors))
+    specs.update(_shape_specs_from_entries(shape_entries))
 
     env_self = SimpleNamespace(
         num_envs=num_envs,
@@ -240,9 +310,8 @@ def _mock_namespace(num_envs: int, allowed_tensors: list[str] | None) -> dict[st
         reset_time_outs=torch.zeros(num_envs, dtype=torch.bool),
     )
 
-    for entry in allowed_tensors or []:
-        path = _normalize_tensor_entry(entry)
-        if not path or path in _BASE_SELF_ATTRS:
+    for path in used_self_paths:
+        if not path:
             continue
         shape = specs.get(path)
         value = _mock_value_for_path(path, shape, num_envs)
@@ -256,6 +325,8 @@ def _mock_value_for_path(path: str, shape: tuple[int, ...] | None, num_envs: int
 
     if path.startswith("cfg."):
         return 1
+    if shape is None:
+        shape = _infer_shape_from_path(path)
     tensor_shape = (num_envs,) if shape is None else (num_envs, *shape)
     leaf = path.rsplit(".", 1)[-1].lower()
     if any(token in leaf for token in ("success", "done", "terminated", "timeout", "flag", "mask")):
@@ -263,6 +334,15 @@ def _mock_value_for_path(path: str, shape: tuple[int, ...] | None, num_envs: int
     if leaf.endswith(("idx", "index")):
         return torch.zeros(tensor_shape, dtype=torch.long)
     return torch.zeros(tensor_shape)
+
+
+def _infer_shape_from_path(path: str) -> tuple[int, ...] | None:
+    leaf = path.rsplit(".", 1)[-1].lower()
+    if leaf.endswith(("_pos_w", "_pos_b", "_waypoint_w", "_target_w", "_lin_vel_b", "_ang_vel_b", "_gravity_b")):
+        return (3,)
+    if leaf.endswith(("_quat_w", "_quat_b")):
+        return (4,)
+    return None
 
 
 def _reward_errors(reward: Any, num_envs: int) -> list[str]:
@@ -298,13 +378,13 @@ def _metric_store_errors(env_self: Any, num_envs: int) -> list[str]:
                 continue
             if tuple(value.shape) != (num_envs,):
                 errors.append(
-                    f"Metric '{key}' in {store_name} has shape {tuple(value.shape)}, "
-                    f"expected ({num_envs},). Metrics must remain per-environment tensors."
+                    f"Metric or reward-term '{key}' in {store_name} has shape {tuple(value.shape)}, "
+                    f"expected ({num_envs},). Values must remain per-environment tensors."
                 )
             if not (torch.is_floating_point(value) or torch.is_complex(value)):
                 errors.append(
-                    f"Metric '{key}' in {store_name} has dtype {value.dtype}; "
-                    "metrics must be floating point because reset logging calls mean()."
+                    f"Metric or reward-term '{key}' in {store_name} has dtype {value.dtype}; "
+                    "logged values must be floating point because reset logging calls mean()."
                 )
     return errors
 
@@ -367,6 +447,17 @@ def _self_leaf_paths(tree: ast.Module) -> set[str]:
         if isinstance(node, ast.Attribute) and _dotted_name(node).startswith("self.")
     }
     return {path for path in paths if not any(other.startswith(path + ".") for other in paths)}
+
+
+def _used_reward_self_paths(tree: ast.Module) -> set[str]:
+    """Return non-runtime self.* paths actually used by the generated code."""
+
+    paths: set[str] = set()
+    for path in _self_leaf_paths(tree):
+        normalized = _normalize_tensor_entry(path)
+        if normalized and not _is_base_self_path(normalized):
+            paths.add(normalized)
+    return paths
 
 
 def _is_base_self_path(path: str) -> bool:

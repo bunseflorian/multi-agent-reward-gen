@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..configs import get_path, get_raw_value, isaaclab_root as configured_isaaclab_root
+from ..configs import config_get, config_path
 from ..core import PPOConfig
 
 
@@ -19,9 +19,10 @@ def build_ppo_command(
 ) -> list[str]:
     """Return the RL-Games training command list suitable for ``subprocess``."""
 
-    root = Path(isaaclab_root) if isaaclab_root is not None else configured_isaaclab_root()
-    launcher = root / get_path("isaaclab", "launcher").relative_to(configured_isaaclab_root())
-    train_script = get_path("isaaclab", "rl_games_train_script").relative_to(configured_isaaclab_root())
+    isaaclab_config_root = config_path("paths.isaaclab_root")
+    root = Path(isaaclab_root) if isaaclab_root is not None else isaaclab_config_root
+    launcher = root / config_path("paths.isaaclab_launcher").relative_to(isaaclab_config_root)
+    train_script = config_path("paths.rl_games_train_script").relative_to(isaaclab_config_root)
 
     command = [
         str(launcher),
@@ -47,12 +48,9 @@ def build_ppo_command(
 
 
 def configured_conda_env() -> str | None:
-    """Return the IsaacLab conda env from ``paths.yaml``, or ``None``."""
+    """Return the IsaacLab conda env from central app config, or ``None``."""
 
     try:
-        conda_env = get_raw_value("isaaclab", "conda_env")
-    except KeyError:
+        return config_get("paths.isaaclab_conda_env")
+    except ValueError:
         return None
-    if not isinstance(conda_env, str):
-        return None
-    return conda_env or None
