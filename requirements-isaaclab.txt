@@ -1,0 +1,10 @@
+# Requirements for the 'isaaclab' conda environment.
+# Install after setting up IsaacLab: pip install -e source/isaaclab_tasks
+#
+#   conda activate isaaclab
+#   pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-isaaclab.txt
+
+streamlit>=1.54.0
+altair>=6.0.0
+pandas>=2.3.0
+PyYAML>=6.0.2

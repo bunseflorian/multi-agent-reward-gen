@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from ..configs import config_get
@@ -38,7 +37,6 @@ class MultiAgentRewardSystem:
         client: QwenClient,
         *,
         recorder: RunRecorder | None = None,
-        logger: RunRecorder | None = None,
         planner: PlannerAgent | None = None,
         coder: CoderAgent | None = None,
         reviewer: ReviewerAgent | None = None,
@@ -47,7 +45,7 @@ class MultiAgentRewardSystem:
         agent_reasoning: dict[str, bool] | None = None,
     ):
         self.client = client
-        self.logger = recorder or logger or null_logger()
+        self.logger = recorder or null_logger()
         reasoning = agent_reasoning or {}
         self.planner = planner or PlannerAgent(client, enable_thinking=reasoning.get("planner", False), logger=self.logger)
         self.coder = coder or CoderAgent(client, enable_thinking=reasoning.get("coder", False), logger=self.logger)
@@ -75,34 +73,20 @@ class MultiAgentRewardSystem:
         hooks = ppo_config.hooks
         state = RunState(task_brief=task_brief, rl_training_skipped=not ppo_config.run_rl_training)
         state.recorder = self.logger
-        self.logger.record_initial_artifacts(state)
-        self.logger.event(
-            "run_started",
-            task_id=task_brief.task_id,
-            env_source_path=task_brief.env_source_path,
-            run_rl_training=ppo_config.run_rl_training,
-        )
 
         if initial_plan is None:
             if hooks.status_callback is not None:
                 hooks.status_callback("Planner")
-            self.logger.event("agent_started", agent="planner")
             plan = self._plan_or_fail(task_brief, state)
             if plan is None:
-                self.logger.event("run_finished", status=state.status.value, accepted=state.accepted)
-                self.logger.save_run_state(state)
                 return state
-            self.logger.event("agent_finished", agent="planner")
         else:
             plan = initial_plan
-            self.logger.event("plan_accepted")
 
         state.plan = plan
         state.status = RunStatus.PLANNED
 
         if stop_after_plan:
-            self.logger.event("run_finished", status=state.status.value, accepted=state.accepted)
-            self.logger.save_run_state(state)
             return state
 
         loop = _IterationLoop(
@@ -180,7 +164,6 @@ class _IterationLoop:
                 self.format_retries = 0
             except ValueError as exc:
                 if self._handle_format_error(exc):
-                    self._finish_run()
                     return self.state
                 continue
 
@@ -197,14 +180,10 @@ class _IterationLoop:
             )
             self.previous_code = code
 
-            finished = self._evaluate_iteration(code, code_review, test_report, ppo_report, critique)
-            if finished:
-                self._finish_run()
+            if self._evaluate_iteration(code, code_review, test_report, ppo_report, critique):
                 return self.state
 
-        state = self._finalize_after_loop()
-        self._finish_run()
-        return state
+        return self._finalize_after_loop()
 
     # ---------------------------------------------------------------- helpers
 
@@ -215,25 +194,16 @@ class _IterationLoop:
 
     def _generate_and_review(self) -> tuple[CodeArtifact, CodeReviewArtifact, TestReport]:
         self._notify(f"Coder (iteration {self.iteration})")
-        self.system.logger.event("agent_started", agent="coder", iteration=self.iteration)
         code = self.system.coder.write_code(
             self.plan,
             previous_code=self.previous_code,
             reviewer_feedback=self.reviewer_feedback,
             critic_feedback=self.critic_feedback,
         )
-        self.system.logger.event("agent_finished", agent="coder", iteration=self.iteration)
         self.state.status = RunStatus.CODE_GENERATED
 
         self._notify(f"Reviewer (iteration {self.iteration})")
-        self.system.logger.event("agent_started", agent="reviewer", iteration=self.iteration)
         code_review = self.system.reviewer.review(self.plan, code)
-        self.system.logger.event(
-            "agent_finished",
-            agent="reviewer",
-            iteration=self.iteration,
-            passed=code_review.passed,
-        )
         test_report = TestReport(
             passed=code_review.passed,
             errors=code_review.errors,
@@ -258,12 +228,6 @@ class _IterationLoop:
             self._notify(f"PPO Training (iteration {self.iteration})")
             self.state.status = RunStatus.PPO_RUNNING
             ppo_run_dir = _ppo_run_dir(self.run_dir, self.rl_runs_started)
-            self.system.logger.event(
-                "ppo_started",
-                iteration=self.iteration,
-                rl_run_index=self.rl_runs_started,
-                run_dir=ppo_run_dir,
-            )
         else:
             self.state.status = RunStatus.TESTED
             ppo_run_dir = self.run_dir
@@ -271,39 +235,18 @@ class _IterationLoop:
         ppo_config = self._ppo_config_with_recording()
         ppo_report = self.system.tester.test(self.task_brief, code, ppo_config, ppo_run_dir)
         if ppo_report is not None:
-            self.system.logger.log_output(format_ppo_live_log(ppo_report), agent="ppo", extract=False)
-            self.system.logger.event(
-                "ppo_finished",
-                iteration=self.iteration,
-                status=ppo_report.status,
-                passed=ppo_report.passed,
-                log_path=ppo_report.log_path,
-                summary_path=ppo_report.summary_path,
-            )
+            self.system.logger.write(format_ppo_live_log(ppo_report), agent="ppo", kind="output")
         self.state.status = RunStatus.PPO_TESTED if self.ppo_config.run_rl_training else RunStatus.TESTED
 
         if ppo_report.status == "skipped":
             return ppo_report, None
 
         self._notify(f"Critic (iteration {self.iteration})")
-        self.system.logger.event("agent_started", agent="critic", iteration=self.iteration)
         critique = self.system.critic.critique(self.plan, code, ppo_report)
-        self.system.logger.event(
-            "agent_finished",
-            agent="critic",
-            iteration=self.iteration,
-            should_retry=critique.should_retry,
-        )
         return ppo_report, critique
 
     def _handle_format_error(self, exc: ValueError) -> bool:
         self.format_retries += 1
-        self.system.logger.event(
-            "format_error",
-            iteration=self.iteration,
-            retries=self.format_retries,
-            error=str(exc),
-        )
         if self.format_retries >= self.max_format_retries:
             self.state.status = RunStatus.FAILED_FORMAT
             self.state.final_report = TestReport(
@@ -376,26 +319,8 @@ class _IterationLoop:
             self.hooks.status_callback(message)
 
     def _ppo_config_with_recording(self) -> PPOConfig:
-        original_callback = self.ppo_config.hooks.ppo_progress_callback
+        return self.ppo_config
 
-        def _record_progress(event: dict) -> None:
-            self.system.logger.event("ppo_progress", iteration=self.iteration, **event)
-            if original_callback is not None:
-                original_callback(event)
-
-        return replace(
-            self.ppo_config,
-            hooks=replace(self.ppo_config.hooks, ppo_progress_callback=_record_progress),
-        )
-
-    def _finish_run(self) -> None:
-        self.system.logger.event(
-            "run_finished",
-            status=self.state.status.value,
-            accepted=self.state.accepted,
-            iterations=len(self.state.iterations),
-        )
-        self.system.logger.save_run_state(self.state)
 
 
 def _finalize_state(

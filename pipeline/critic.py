@@ -37,7 +37,7 @@ class CriticAgent:
             )
 
         prompt = build_critic_prompt(plan, code, ppo_report)
-        self.logger.log_full(prompt, agent="critic", kind="input")
+        self.logger.write(prompt, agent="critic", kind="input")
 
         agent_output = self.client.generate_text(
             CRITIC_SYSTEM_PROMPT,
@@ -45,10 +45,9 @@ class CriticAgent:
             max_tokens=max(self.client.config.max_tokens, 2048),
             enable_thinking=self.enable_thinking,
         )
-        self.logger.log_full(agent_output, agent="critic", kind="output")
 
         feedback = extract_final_answer(agent_output)
-        self.logger.log_output(agent_output, agent="critic", extract=False)
+        self.logger.write(feedback, agent="critic", kind="output")
 
         return CritiqueArtifact(
             feedback=feedback,

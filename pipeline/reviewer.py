@@ -40,7 +40,7 @@ class ReviewerAgent:
         )
 
         prompt = build_reviewer_prompt(plan, code_artifact, static_report=static_report)
-        self.logger.log_full(prompt, agent="reviewer", kind="input")
+        self.logger.write(prompt, agent="reviewer", kind="input")
 
         agent_output = self.client.generate_text(
             REVIEWER_SYSTEM_PROMPT,
@@ -48,12 +48,11 @@ class ReviewerAgent:
             max_tokens=6500,
             enable_thinking=self.enable_thinking,
         )
-        self.logger.log_full(agent_output, agent="reviewer", kind="output")
 
         raw_response = extract_final_answer(agent_output)
         passed = review_passed(raw_response) and static_report.passed
         feedback = extract_review_feedback(raw_response)
-        self.logger.log_output(agent_output, agent="reviewer", extract=False)
+        self.logger.write(raw_response, agent="reviewer", kind="output")
 
         errors = [] if passed else [feedback or "Reviewer rejected the reward-code candidate."]
         return CodeReviewArtifact(

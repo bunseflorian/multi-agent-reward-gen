@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -11,7 +10,6 @@ if str(PACKAGE_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_IMPORT_ROOT))
 
 from qwen_agentv2.configs import build_ppo_config, clear_app_config_cache, load_app_config
-from qwen_agentv2.core import CodeArtifact, RunState, RunStatus, TaskBrief, TestReport
 from qwen_agentv2.pipeline import RunRecorder
 
 
@@ -29,35 +27,21 @@ def test_load_app_config_applies_environment_overrides(monkeypatch):
     clear_app_config_cache()
 
 
-def test_run_recorder_writes_events_and_run_state(tmp_path):
-    state = RunState(
-        task_brief=TaskBrief(
-            task_id="unit_task",
-            objective="test objective",
-            env_source_path="/tmp/env.py",
-            env_code_context="class Env: pass",
-        ),
-        status=RunStatus.ACCEPTED_STATIC,
-        final_code=CodeArtifact(code="def reward():\n    return 1", raw_response="raw"),
-        final_report=TestReport(passed=True),
-    )
+def test_run_recorder_writes_conversation(tmp_path):
     recorder = RunRecorder(tmp_path)
-    state.recorder = recorder
 
-    recorder.event("run_started", task_id="unit_task")
-    recorder.log_full("prompt", agent="planner", kind="input")
-    recorder.log_output("answer", agent="planner", extract=False)
-    recorder.save_run_state(state)
+    recorder.write("hello from planner", agent="planner", kind="input")
+    recorder.write("plan result", agent="planner", kind="output")
 
-    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    run_state = json.loads((tmp_path / "run_state.json").read_text())
+    conversation = (tmp_path / "conversation.md").read_text(encoding="utf-8")
 
-    assert events[0]["event"] == "run_started"
-    assert any(event["event"] == "agent_prompt" and event["content"] == "prompt" for event in events)
-    assert any(event["event"] == "conversation_entry" and event["content"] == "answer" for event in events)
-    assert any(event["event"] == "run_state" for event in events)
-    assert (tmp_path / "conversation.md").is_file()
-    assert (tmp_path / "full_conversation.md").is_file()
-    assert run_state["status"] == "accepted_static"
-    assert run_state["task_brief"]["task_id"] == "unit_task"
-    assert run_state["final_code"]["code"].startswith("def reward")
+    assert "## Planner — Input" in conversation
+    assert "hello from planner" in conversation
+    assert "## Planner — Output" in conversation
+    assert "plan result" in conversation
+
+
+def test_run_recorder_null_logger_does_nothing(tmp_path):
+    from qwen_agentv2.pipeline.logger import null_logger
+    recorder = null_logger()
+    recorder.write("should not crash", agent="planner", kind="input")

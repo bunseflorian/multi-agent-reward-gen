@@ -1,4 +1,4 @@
-"""Single high-level ``run_task`` entry used by CLI and UI alike."""
+"""Single high-level ``run_task`` entry used by the UI."""
 
 from __future__ import annotations
 
@@ -9,8 +9,9 @@ from typing import Callable
 from ..configs import build_ppo_config, config_path
 from ..core import PlanArtifact, PPOConfig, RunState, TaskBrief
 from ..llm import QwenClient, load_qwen_config
-from ..pipeline import MultiAgentRewardSystem, RunRecorder
-from ..pipeline.env_context import load_env_context
+from .env_context import load_env_context
+from .logger import RunRecorder
+from .orchestrator import MultiAgentRewardSystem
 
 
 def run_task(

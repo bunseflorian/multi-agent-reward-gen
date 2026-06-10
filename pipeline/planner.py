@@ -25,7 +25,7 @@ class PlannerAgent:
 
     def plan(self, task_brief: TaskBrief) -> PlanArtifact:
         prompt = build_planner_prompt(task_brief)
-        self.logger.log_full(prompt, agent="planner", kind="input")
+        self.logger.write(prompt, agent="planner", kind="input")
 
         raw = self.client.generate_text(
             PLANNER_SYSTEM_PROMPT,
@@ -33,10 +33,9 @@ class PlannerAgent:
             max_tokens=6500,
             enable_thinking=self.enable_thinking,
         )
-        self.logger.log_full(raw, agent="planner", kind="output")
 
         text = extract_final_answer(raw)
-        self.logger.log_output(raw, agent="planner")
+        self.logger.write(text, agent="planner", kind="output")
         return PlanArtifact(
             text=text,
             requirements=extract_plan_bullets(text),

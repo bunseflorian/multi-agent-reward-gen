@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from ..core import CodeArtifact, PlanArtifact
 from ..llm import QwenClient
-from ..llm.parsers import parse_reward_code, require_code_block_terminator
+from ..llm.parsers import extract_logged_output, parse_reward_code, require_code_block_terminator
 from .logger import RunRecorder, null_logger
 from .prompts import build_coder_prompt
 
@@ -37,7 +37,7 @@ class CoderAgent:
             reviewer_feedback=reviewer_feedback,
             critic_feedback=critic_feedback,
         )
-        self.logger.log_full(prompt, agent="coder", kind="input")
+        self.logger.write(prompt, agent="coder", kind="input")
 
         raw_response = self.client.generate_text(
             system_prompt,
@@ -45,11 +45,10 @@ class CoderAgent:
             max_tokens=6500,
             enable_thinking=self.enable_thinking,
         )
-        self.logger.log_full(raw_response, agent="coder", kind="output")
 
         require_code_block_terminator(raw_response, "Coder")
         parsed = parse_reward_code(raw_response)
-        self.logger.log_output(raw_response, agent="coder")
+        self.logger.write(extract_logged_output(raw_response), agent="coder", kind="output")
 
         return CodeArtifact(
             code=parsed.code,

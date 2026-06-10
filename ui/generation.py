@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..configs import build_ppo_config
-from ..cli.run import run_task
+from ..pipeline import run_task
 from ..core import PPOConfig, RunHooks, RunStatus
 from ..pipeline import run_dir_name
 from ..server import QwenServerSettings
@@ -196,9 +196,7 @@ def _continue_pending_plan(
         )
         status_placeholder.empty()
         final_run_dir = form.output_dir / run_dir_name(state)
-        tmp_run_dir.rename(final_run_dir)
         state.recorder.move_to(final_run_dir)
-        state.recorder.save_run_state(state)
         run_dir = final_run_dir
         st.session_state.pop("pending_plan_run", None)
     except Exception as exc:
@@ -215,16 +213,9 @@ def _reject_pending_plan(st, pending: dict) -> None:
     form: TaskFormValues = pending["form"]
 
     state.status = RunStatus.REJECTED_PLAN
-    if state.recorder is not None:
-        state.recorder.event("plan_rejected")
-        state.recorder.event("run_finished", status=state.status.value, accepted=state.accepted)
-        state.recorder.save_run_state(state)
-
     final_run_dir = form.output_dir / run_dir_name(state)
-    tmp_run_dir.rename(final_run_dir)
     if state.recorder is not None:
         state.recorder.move_to(final_run_dir)
-        state.recorder.save_run_state(state)
 
     st.session_state.pop("pending_plan_run", None)
     st.info(f"Plan rejected. Run saved to `{final_run_dir}`.")
