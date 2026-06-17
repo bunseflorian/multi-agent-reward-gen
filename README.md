@@ -10,7 +10,7 @@ A multi-agent pipeline that automatically generates and validates reward functio
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-- [Model Setup](#model-setup)
+- [LLM Server Setup](#llm-server-setup)
 - [Configuration](#configuration)
 - [Usage](#usage)
   - [Run the Streamlit UI](#run-the-streamlit-ui)
@@ -46,10 +46,8 @@ User Prompt
 └──────────────────────────────────────────────────────┘
     │
     ▼
- final_reward.py  +  run artifacts
+ run artifacts
 ```
-
-See [docs/architecture.md](docs/architecture.md) for the full UML sequence diagram and per-agent input/output specs.
 
 ---
 
@@ -57,109 +55,122 @@ See [docs/architecture.md](docs/architecture.md) for the full UML sequence diagr
 
 | Requirement | Notes |
 |---|---|
-| NVIDIA GPU with CUDA | vLLM requires CUDA; VRAM requirement depends on the chosen model |
+| NVIDIA GPU with CUDA | Required by IsaacLab for simulation and PPO training |
 | [IsaacLab](https://isaac-sim.github.io/IsaacLab/source/setup/installation/index.html) | Must be installed in a conda environment (default name: `isaaclab`) |
-| Conda / Miniconda | Used to manage the two separate environments |
-| Python 3.10 – 3.11 | Required by both IsaacLab and vLLM |
+| Conda / Miniconda | Used to manage the conda environments |
+| Python 3.10 – 3.11 | Required by IsaacLab and vLLM |
+| vLLM server | Runs in a separate conda environment — on the same machine or a dedicated server PC |
 
 ---
 
 ## Installation
 
-The project requires **two separate conda environments**: one for IsaacLab (simulation + PPO) and one for the vLLM server (LLM inference). They must stay separate because their CUDA and Python dependencies conflict.
-
 ### 1. IsaacLab environment
 
-Follow the [official IsaacLab installation guide](https://isaac-sim.github.io/IsaacLab/source/setup/installation/index.html). The environment can have any name, but if it differs from `isaaclab` you must update `paths.isaaclab_conda_env` in [`configs/app.yaml`](configs/app.yaml#L15).
+Follow the [official IsaacLab installation guide](https://isaac-sim.github.io/IsaacLab/source/setup/installation/index.html). The environment can have any name, but if it differs from `isaaclab` update `paths.isaaclab_conda_env` in [`configs/app.yaml`](configs/app.yaml).
 
-Verify the installation:
-```bash
-conda activate isaaclab
-python -c "import isaaclab; print('IsaacLab OK')"
-```
-
-Install the task package (from the IsaacLab root):
+Install the task package and UI dependencies (from the IsaacLab root):
 ```bash
 conda activate isaaclab
 pip install -e source/isaaclab_tasks
-```
-
-Install the UI and pipeline dependencies:
-```bash
-conda activate isaaclab
 pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-isaaclab.txt
 ```
 
 ### 2. vLLM server environment
 
-Create a dedicated environment for the LLM server:
 ```bash
 conda create -n qwen-vllm-server python=3.11 -y
 conda activate qwen-vllm-server
-pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-server.txt
-```
-
-Verify:
-```bash
-conda activate qwen-vllm-server
-python -c "import vllm; print('vLLM OK')"
+pip install -r qwen_vllm_server/requirements.txt
 ```
 
 ---
 
-## Model Setup
+## LLM Server Setup
 
-Download any vLLM-compatible chat model (e.g. from Hugging Face) and place it in the `models/` directory.
-The `models/` directory is **git-ignored** — model weights are never committed to the repository.
+The vLLM server is managed via [`qwen_vllm_server/`](qwen_vllm_server/), which is self-contained and can run on the same machine or be copied to a dedicated server PC.
+
+### Download the model
 
 ```bash
 conda activate qwen-vllm-server
-pip install huggingface_hub
-
 python -c "
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id='<org>/<model-name>',   # e.g. Qwen/Qwen3.5-4B
-    local_dir='models/<model-dir>'  # e.g. models/llm-qwen3.5-4B
+    repo_id='<org>/<model-name>',        # e.g. Qwen/Qwen3.5-4B
+    local_dir='qwen_vllm_server/models/<model-dir>'
 )
 "
 ```
 
-Confirm that `models/<model-dir>/config.json` exists after the download, then update `paths.qwen_model` and `llm.model` in [configs/app.yaml](configs/app.yaml) to match.
+Update `model_path` in [`qwen_vllm_server/config.yaml`](qwen_vllm_server/config.yaml) to match the downloaded directory.
+
+### Start the server
+
+```bash
+conda activate qwen-vllm-server
+python qwen_vllm_server/launch_server.py
+```
+
+Alternatively, use the **Start server** button in the UI sidebar (see [Usage](#usage)).
+
+Verify the server is running:
+```bash
+curl http://localhost:8000/v1/models
+```
+
+### Running on a separate machine
+
+Copy `qwen_vllm_server/` to the server PC, install the requirements there, and update `llm.base_url` in `configs/app.yaml` to point to the server's IP:
+
+```bash
+scp -r qwen_vllm_server/ user@server-pc:~/
+# On the server PC: edit config.yaml, then python launch_server.py
+```
 
 ---
 
 ## Configuration
 
-All runtime settings are in [configs/app.yaml](configs/app.yaml). The most important fields:
+All runtime settings are in [`configs/app.yaml`](configs/app.yaml). The most important fields:
 
 ```yaml
 paths:
-  isaaclab_root: /path/to/IsaacLab          # absolute path to your IsaacLab checkout
-  qwen_model: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/models/<model-dir>
+  isaaclab_root: /path/to/IsaacLab       # absolute path to your IsaacLab checkout
 
 llm:
-  base_url: http://localhost:8000/v1         # vLLM server URL
-  model: <org>/<model-name>                  # must match --served-model-name of the server
+  base_url: http://localhost:8000/v1     # URL of the running vLLM server
+  model: <org>/<model-name>              # must match served_model_name in qwen_vllm_server/config.yaml
+
+server:
+  launcher: source/.../qwen_vllm_server/launch_server.py  # enables Start button + auto pause/resume
+  pid_file: source/.../qwen_vllm_server/.qwen_server.pid
+  startup_timeout_seconds: 300
 
 ppo:
-  run_rl_training: false                     # set true to enable PPO validation
-  num_envs: 4096
-  max_iterations: 150
-  timeout_seconds: 300
+  run_rl_training: false                 # set true to enable PPO validation
 ```
 
-**Update `paths.isaaclab_root`** to match your local IsaacLab installation path before running.
+**`server.launcher` / `server.pid_file`** enable two features:
+- **Start / Stop** buttons in the UI sidebar.
+- Automatic server kill before PPO training and restart afterward (needed when server and RL share one GPU). The server is killed with SIGKILL so GPU memory is freed immediately; PPO's own initialisation time (~60–90 s) gives the OS sufficient time to reclaim it. Leave both fields empty when the server runs on a separate machine.
 
-Any config value can also be overridden at runtime via `QWEN_*` environment variables (see [Environment Override Variables](#environment-override-variables)).
+Any config value can also be overridden via `QWEN_*` environment variables:
+
+| Variable | Config key |
+|---|---|
+| `QWEN_BASE_URL` | `llm.base_url` |
+| `QWEN_MODEL` | `llm.model` |
+| `QWEN_ISAACLAB_ROOT` | `paths.isaaclab_root` |
+| `QWEN_SERVER_LAUNCHER` | `server.launcher` |
+| `QWEN_SERVER_PID_FILE` | `server.pid_file` |
+| `QWEN_RUN_RL_TRAINING` | `ppo.run_rl_training` |
 
 ---
 
 ## Usage
 
 ### Run the Streamlit UI
-
-Activate the `isaaclab` environment and launch the web interface:
 
 ```bash
 conda activate isaaclab
@@ -170,9 +181,9 @@ streamlit run ui/app.py
 The UI opens in your browser at `http://localhost:8501`.
 
 **Sidebar (left panel):**
-- Configure the vLLM server host, port, model path, and GPU settings.
-- Use **Start server** to launch the vLLM process (runs in the `qwen-vllm-server` conda environment) and **Stop server** to shut it down.
-- A green indicator confirms the server is reachable before generating.
+- Set the **Server URL** (defaults to `llm.base_url` from `configs/app.yaml`).
+- A green indicator confirms the server is reachable.
+- **Start / Stop** buttons appear when `server.launcher` is configured. Start is disabled while the server is running, Stop while it is not.
 
 **Main panel:**
 1. Select an **Environment file** from the `environments/` directory.
@@ -181,7 +192,9 @@ The UI opens in your browser at `http://localhost:8501`.
 4. Adjust iteration budgets and PPO settings as needed.
 5. Click **Generate reward code**.
 
-Results (plan, generated code, conversation log) appear inline and are saved under `runs/`.
+Results appear inline and are saved under `runs/`.
+
+> **Shared GPU (server and RL training on the same machine):** When `server.launcher` is configured, the UI automatically kills the vLLM server (SIGKILL) before each PPO run and restarts it afterward. No manual intervention needed.
 
 ---
 
@@ -190,13 +203,10 @@ Results (plan, generated code, conversation log) appear inline and are saved und
 ```
 qwen_agentv2/
 ├── agents/             # PPO hyperparameter configs (rl_games, skrl, rsl_rl)
-├── cli/                # CLI entry point and display helpers
 ├── configs/            # Central app config (app.yaml + loader)
 ├── core/               # Shared dataclasses (TaskBrief, PPOConfig, RunState, …)
-├── docs/               # Architecture documentation
 ├── environments/       # IsaacLab quadcopter environments (template + variants)
 ├── llm/                # Qwen API client and config loader
-├── models/             # Local model weights (git-ignored, not committed)
 ├── pipeline/           # Agent implementations + orchestrator
 │   ├── orchestrator.py     Runs the full Planner→Coder→Reviewer→Tester→Critic loop
 │   ├── planner.py
@@ -205,10 +215,11 @@ qwen_agentv2/
 │   ├── tester.py
 │   ├── critic.py
 │   ├── prompts.py          All system and user prompt templates
-│   └── logger.py           RunRecorder — writes events.jsonl and run artifacts
+│   └── logger.py           RunRecorder — appends all agent turns to conversation.md
 ├── ppo/                # PPO subprocess runner
+├── qwen_vllm_server/   # Standalone vLLM server launcher (config.yaml + launch_server.py)
 ├── runs/               # Generated run directories (created at runtime)
-├── server/             # vLLM server launcher and health check
+├── server/             # Server health check and stop/start control
 ├── test/               # Agent smoke tests
 └── ui/                 # Streamlit web interface
 ```
@@ -216,14 +227,7 @@ qwen_agentv2/
 **Run directory contents** (created per generation run under `runs/`):
 ```
 runs/<timestamp>_<status>/
-├── task_brief.md
-├── env_code_context.md
-├── conversation.md
-├── full_conversation.md
-├── events.jsonl
-├── run_state.json
-├── final_reward.py         (if a candidate was accepted)
+├── conversation.md         all agent turns (planner, coder, reviewer, critic)
 ├── ppo.log                 (if PPO ran)
 └── ppo_summary.json        (if PPO ran)
 ```
-

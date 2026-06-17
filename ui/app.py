@@ -16,11 +16,13 @@ _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
-from qwen_agentv2.server import load_qwen_server_settings, qwen_server_is_ready  # noqa: E402
+from qwen_agentv2.configs import config_path  # noqa: E402
+from qwen_agentv2.server import qwen_server_is_ready  # noqa: E402
 from qwen_agentv2.ui.generation import render_pending_plan, run_generation  # noqa: E402
-from qwen_agentv2.ui.server_control import PROJECT_ROOT  # noqa: E402
 from qwen_agentv2.ui.sidebar import render_sidebar  # noqa: E402
 from qwen_agentv2.ui.task_form import discover_env_files, render_task_form  # noqa: E402
+
+PROJECT_ROOT = config_path("paths.qwen_agent_root")
 
 
 def main() -> None:
@@ -31,8 +33,7 @@ def main() -> None:
     st.set_page_config(page_title="Qwen Reward UI", layout="wide")
     st.title("Qwen Reward Generator")
 
-    default_settings = load_qwen_server_settings(PROJECT_ROOT)
-    settings, base_url, server_command = render_sidebar(st, default_settings)
+    base_url = render_sidebar(st)
 
     env_files = discover_env_files(PROJECT_ROOT)
     if not env_files:
@@ -41,12 +42,7 @@ def main() -> None:
 
     form = render_task_form(st, env_files, PROJECT_ROOT)
 
-    if render_pending_plan(
-        st,
-        base_url=base_url,
-        server_command=server_command,
-        default_settings=default_settings,
-    ):
+    if render_pending_plan(st, base_url=base_url):
         return
 
     if not st.button("Generate reward code", type="primary", use_container_width=True):
@@ -56,16 +52,10 @@ def main() -> None:
         st.error(f"Environment file does not exist: {form.env_path}")
         return
     if not qwen_server_is_ready(base_url, timeout=2.0):
-        st.error(f"Qwen server is not reachable at {base_url}. Start it first.")
+        st.error(f"LLM server is not reachable at {base_url}. Check the server URL in the sidebar.")
         return
 
-    run_generation(
-        st,
-        base_url=base_url,
-        server_command=server_command,
-        default_settings=default_settings,
-        form=form,
-    )
+    run_generation(st, base_url=base_url, form=form)
 
 
 if __name__ == "__main__":

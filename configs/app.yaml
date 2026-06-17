@@ -6,17 +6,15 @@ paths:
   qwen_agent_root: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2
   default_env: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/environments/quadcopter_env_tracking.py
   env_dir: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/environments
-  qwen_model: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/models/llm-qwen3.5-4B
   runs_dir: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/runs
-  qwen_server_pid_file: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/.qwen_server.pid
-  qwen_server_log_file: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/runs/qwen_server.log
   ppo_candidate_dir: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/runs/ppo_candidate
-  qwen_server_conda_env: qwen-vllm-server
   isaaclab_conda_env: isaaclab
   isaaclab_launcher: isaaclab.sh
   rl_games_train_script: scripts/reinforcement_learning/rl_games/train.py
 
 llm:
+  # If the vLLM server runs on a separate machine, set this to http://<server-ip>:8000/v1
+  # or override via env var: QWEN_BASE_URL=http://<server-ip>:8000/v1
   base_url: http://localhost:8000/v1
   model: Qwen/Qwen3.5-4B
   api_key: EMPTY
@@ -40,14 +38,10 @@ llm:
   debug: false
 
 server:
-  served_model_name: Qwen/Qwen3.5-4B
-  reasoning_parser: qwen3
-  reasoning_config: '{"reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
-  host: 127.0.0.1
-  port: 8000
-  max_model_len: 11776
-  gpu_memory_utilization: 0.85
-  max_num_seqs: 1
+  # Paths needed to auto-stop/start the server around PPO training.
+  # Leave empty if the server runs on a separate machine.
+  launcher: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/launch_server.py
+  pid_file: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/.qwen_server.pid
   startup_timeout_seconds: 300
 
 pipeline:

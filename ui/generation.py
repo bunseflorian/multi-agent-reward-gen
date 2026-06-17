@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
+import urllib.request
 from pathlib import Path
 
-from ..configs import build_ppo_config
+from ..configs import build_ppo_config, config_get
 from ..pipeline import run_task
 from ..core import PPOConfig, RunHooks, RunStatus
 from ..pipeline import run_dir_name
-from ..server import QwenServerSettings
-from .server_control import (
-    SERVER_LOG_FILE,
-    launch_in_background,
-    stop_server,
-    wait_for_server,
-)
+from ..server import start_server, stop_server
 from .task_form import TaskFormValues
 from .tensorboard_view import render_tensorboard_metrics
 
@@ -23,8 +18,6 @@ def run_generation(
     st,
     *,
     base_url: str,
-    server_command: list[str],
-    default_settings: QwenServerSettings,
     form: TaskFormValues,
 ) -> None:
     """Run the Planner and leave the generated plan pending for UI approval."""
@@ -59,21 +52,10 @@ def run_generation(
         "form": form,
         "run_dir": tmp_run_dir,
     }
-    render_pending_plan(
-        st,
-        base_url=base_url,
-        server_command=server_command,
-        default_settings=default_settings,
-    )
+    render_pending_plan(st, base_url=base_url)
 
 
-def render_pending_plan(
-    st,
-    *,
-    base_url: str,
-    server_command: list[str],
-    default_settings: QwenServerSettings,
-) -> bool:
+def render_pending_plan(st, *, base_url: str) -> bool:
     """Render Accept/Reject controls for a plan created in a previous UI run."""
 
     pending = st.session_state.get("pending_plan_run")
@@ -101,29 +83,16 @@ def render_pending_plan(
         return True
 
     if accept:
-        if not wait_for_server(base_url, 2, ready=True):
-            st.error(f"Qwen server is not reachable at {base_url}. Start it first.")
+        if not _is_server_ready(base_url, timeout=2.0):
+            st.error(f"LLM server is not reachable at {base_url}.")
             return True
-        _continue_pending_plan(
-            st,
-            pending,
-            base_url=base_url,
-            server_command=server_command,
-            default_settings=default_settings,
-        )
+        _continue_pending_plan(st, pending, base_url=base_url)
         return True
 
     return True
 
 
-def _continue_pending_plan(
-    st,
-    pending: dict,
-    *,
-    base_url: str,
-    server_command: list[str],
-    default_settings: QwenServerSettings,
-) -> None:
+def _continue_pending_plan(st, pending: dict, *, base_url: str) -> None:
     form: TaskFormValues = pending["form"]
     planned_state = pending["state"]
     tmp_run_dir: Path = pending["run_dir"]
@@ -149,27 +118,12 @@ def _continue_pending_plan(
         with tensorboard_box.container():
             render_tensorboard_metrics(st, tmp_run_dir, live_event=event)
 
-    def _update_status(agent: str) -> None:
-        status_placeholder.info(f"Running: **{agent}**")
-
-    def pause_qwen() -> None:
-        show_ppo_progress({"status": "qwen_stopping", "message": "Stopping Qwen server before PPO to free GPU memory"})
-        stopped_pid = stop_server()
-        if stopped_pid is None:
-            raise RuntimeError("Cannot stop Qwen server before PPO: no server PID file found.")
-        show_ppo_progress({"status": "qwen_stopping", "message": f"Sent SIGTERM to Qwen server pid={stopped_pid}"})
-        if not wait_for_server(base_url, 60, ready=False):
-            raise RuntimeError("Qwen server did not stop before PPO within 60s.")
-        show_ppo_progress({"status": "qwen_stopped", "message": "Qwen server stopped; PPO can use GPU memory"})
-
-    def resume_qwen() -> None:
-        show_ppo_progress({"status": "qwen_starting", "message": "Restarting Qwen server after PPO for RL Critic"})
-        launch_in_background(server_command, log_file=SERVER_LOG_FILE)
-        if not wait_for_server(base_url, default_settings.startup_timeout_seconds, ready=True):
-            raise RuntimeError("Qwen server did not become ready after PPO.")
-        show_ppo_progress({"status": "qwen_ready", "message": f"Qwen server ready again at {base_url}"})
+    pre_cb, post_cb = _server_ppo_hooks(base_url, show_ppo_progress) if form.run_rl else (None, None)
 
     status_placeholder = st.empty()
+
+    def _update_status(agent: str) -> None:
+        status_placeholder.info(f"Running: **{agent}**")
 
     try:
         state = run_task(
@@ -185,8 +139,8 @@ def _continue_pending_plan(
                 headless=form.ppo_kwargs.get("headless", True),
                 hooks=RunHooks(
                     ppo_progress_callback=show_ppo_progress if form.run_rl else None,
-                    pre_training_callback=pause_qwen if form.run_rl else None,
-                    post_training_callback=resume_qwen if form.run_rl else None,
+                    pre_training_callback=pre_cb,
+                    post_training_callback=post_cb,
                 ),
             ),
             run_dir=tmp_run_dir,
@@ -232,6 +186,14 @@ def _build_ppo_config(form: TaskFormValues, *, hooks: RunHooks) -> PPOConfig:
     )
 
 
+def _is_server_ready(base_url: str, timeout: float = 2.0) -> bool:
+    try:
+        with urllib.request.urlopen(f"{base_url}/models", timeout=timeout) as resp:
+            return resp.status < 400
+    except Exception:
+        return False
+
+
 def _render_result(st, *, state, run_dir: Path, run_rl: bool) -> None:
     st.subheader("Result")
     st.write(f"Status: `{state.status.value}`")
@@ -260,3 +222,32 @@ def _render_result(st, *, state, run_dir: Path, run_rl: bool) -> None:
 def _write_error_lines(st, errors: list[str]) -> None:
     for error in errors:
         st.write(error)
+
+
+def _server_ppo_hooks(base_url: str, progress: callable) -> tuple[callable | None, callable | None]:
+    """Return (pre_training, post_training) callbacks if the server is managed locally.
+
+    Returns (None, None) when no launcher is configured (remote server setup).
+    """
+    launcher_str = config_get("server.launcher")
+    pid_file_str = config_get("server.pid_file")
+    timeout = int(config_get("server.startup_timeout_seconds", 300))
+
+    if not launcher_str or not pid_file_str:
+        return None, None
+
+    launcher = Path(launcher_str)
+    pid_file = Path(pid_file_str)
+
+    def pre_training() -> None:
+        progress({"status": "server_stopping", "message": "Killing vLLM server to free GPU memory for PPO"})
+        stop_server(pid_file, base_url)
+        progress({"status": "server_stopped", "message": "vLLM server killed — starting PPO"})
+
+    def post_training() -> None:
+        progress({"status": "server_starting", "message": "Restarting vLLM server after PPO"})
+        if not start_server(launcher, pid_file, base_url, timeout=timeout):
+            raise RuntimeError(f"vLLM server did not become ready within {timeout}s after PPO.")
+        progress({"status": "server_ready", "message": f"vLLM server ready again at {base_url}"})
+
+    return pre_training, post_training

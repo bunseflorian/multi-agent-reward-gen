@@ -1,8 +1,0 @@
-# Requirements for the 'qwen-vllm-server' conda environment.
-#
-#   conda create -n qwen-vllm-server python=3.11 -y
-#   conda activate qwen-vllm-server
-#   pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-server.txt
-
-vllm>=0.19.0
-huggingface_hub>=0.36.0

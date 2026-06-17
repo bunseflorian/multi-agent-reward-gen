@@ -36,15 +36,14 @@ _ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "QWEN_PROJECT_ROOT": ("paths.qwen_agent_root", str),
     "QWEN_DEFAULT_ENV": ("paths.default_env", str),
     "QWEN_ENV_DIR": ("paths.env_dir", str),
-    "QWEN_MODEL_PATH": ("paths.qwen_model", str),
     "QWEN_RUNS_DIR": ("paths.runs_dir", str),
-    "QWEN_SERVER_PID_FILE": ("paths.qwen_server_pid_file", str),
-    "QWEN_SERVER_LOG_FILE": ("paths.qwen_server_log_file", str),
     "QWEN_PPO_CANDIDATE_DIR": ("paths.ppo_candidate_dir", str),
     "QWEN_ISAACLAB_LAUNCHER": ("paths.isaaclab_launcher", str),
     "QWEN_RL_GAMES_TRAIN_SCRIPT": ("paths.rl_games_train_script", str),
     "QWEN_ISAACLAB_CONDA_ENV": ("paths.isaaclab_conda_env", _optional_str),
-    "QWEN_SERVER_CONDA_ENV": ("paths.qwen_server_conda_env", _optional_str),
+    "QWEN_SERVER_LAUNCHER": ("server.launcher", _optional_str),
+    "QWEN_SERVER_PID_FILE": ("server.pid_file", _optional_str),
+    "QWEN_SERVER_STARTUP_TIMEOUT": ("server.startup_timeout_seconds", int),
     "QWEN_BASE_URL": ("llm.base_url", str),
     "QWEN_MODEL": ("llm.model", str),
     "QWEN_API_KEY": ("llm.api_key", str),
@@ -52,14 +51,6 @@ _ENV_OVERRIDES: dict[str, tuple[str, Callable[[str], Any]]] = {
     "QWEN_MAX_TOKENS": ("llm.max_tokens", int),
     "QWEN_ENABLE_THINKING": ("llm.enable_thinking", _as_bool),
     "QWEN_DEBUG": ("llm.debug", _as_bool),
-    "QWEN_REASONING_PARSER": ("server.reasoning_parser", str),
-    "QWEN_REASONING_CONFIG": ("server.reasoning_config", str),
-    "QWEN_HOST": ("server.host", str),
-    "QWEN_PORT": ("server.port", int),
-    "QWEN_MAX_MODEL_LEN": ("server.max_model_len", int),
-    "QWEN_GPU_MEMORY_UTILIZATION": ("server.gpu_memory_utilization", float),
-    "QWEN_MAX_NUM_SEQS": ("server.max_num_seqs", int),
-    "QWEN_STARTUP_TIMEOUT_SECONDS": ("server.startup_timeout_seconds", int),
     "QWEN_MAX_ITERATIONS": ("pipeline.max_iterations", int),
     "QWEN_MAX_RL_ITERATIONS": ("pipeline.max_rl_iterations", _optional_int),
     "QWEN_RUN_RL_TRAINING": ("ppo.run_rl_training", _as_bool),
@@ -116,13 +107,9 @@ def raw_path_config() -> dict[str, Any]:
         "roots": {"isaaclab_root": paths["isaaclab_root"]},
         "project": {"qwen_agent_root": paths["qwen_agent_root"]},
         "environment": {"default_env": paths["default_env"], "env_dir": paths["env_dir"]},
-        "models": {"qwen": paths["qwen_model"]},
         "runtime": {
             "runs_dir": paths["runs_dir"],
-            "qwen_server_pid_file": paths["qwen_server_pid_file"],
-            "qwen_server_log_file": paths["qwen_server_log_file"],
             "ppo_candidate_dir": paths["ppo_candidate_dir"],
-            "qwen_server_conda_env": paths.get("qwen_server_conda_env"),
         },
         "isaaclab": {
             "conda_env": paths.get("isaaclab_conda_env"),
@@ -167,6 +154,11 @@ def _resolve_paths(config: dict[str, Any]) -> None:
         if key.endswith("_conda_env") or value is None:
             continue
         paths[key] = str(resolve_path_value(value, root))
+    server = config.setdefault("server", {})
+    for key in ("launcher", "pid_file"):
+        value = server.get(key)
+        if value is not None:
+            server[key] = str(resolve_path_value(value, root))
 
 
 def _get_nested(data: dict[str, Any], key_path: str, default: Any = None) -> Any:
@@ -184,4 +176,3 @@ def _set_nested(data: dict[str, Any], key_path: str, value: Any) -> None:
     for key in parts[:-1]:
         current = current.setdefault(key, {})
     current[parts[-1]] = value
-
