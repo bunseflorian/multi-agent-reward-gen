@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..configs import config_get
+from ..configs import clear_app_config_cache, config_get
 from ..server import qwen_server_is_ready, start_server, stop_server
 
 
@@ -17,6 +17,7 @@ def render_sidebar(st) -> str:
         default_url = config_get("llm.base_url", "http://localhost:8000/v1")
         base_url = st.text_input("Server URL", value=default_url)
         os.environ["QWEN_BASE_URL"] = base_url
+        clear_app_config_cache()
 
         is_ready = qwen_server_is_ready(base_url, timeout=1.0)
         if is_ready:

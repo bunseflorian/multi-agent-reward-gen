@@ -67,19 +67,21 @@ User Prompt
 
 ### 1. IsaacLab environment
 
-Follow the [official IsaacLab installation guide](https://isaac-sim.github.io/IsaacLab/source/setup/installation/index.html). The environment can have any name, but if it differs from `isaaclab` update `paths.isaaclab_conda_env` in [`configs/app.yaml`](configs/app.yaml).
+Follow the [official IsaacLab installation guide](https://isaac-sim.github.io/IsaacLab/source/setup/installation/index.html). The environment can have any name — if it differs from `isaaclab`, update `paths.isaaclab_conda_env` in [`configs/app.yaml`](configs/app.yaml) or set the env var `QWEN_ISAACLAB_CONDA_ENV=<name>`.
 
 Install the task package and UI dependencies (from the IsaacLab root):
 ```bash
-conda activate isaaclab
+conda activate isaaclab          # or your custom env name
 pip install -e source/isaaclab_tasks
 pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-isaaclab.txt
 ```
 
 ### 2. vLLM server environment
 
+The default name is `qwen-vllm-server`. If you use a different name, update `launch_server.py` accordingly or activate the environment manually before running it.
+
 ```bash
-conda create -n qwen-vllm-server python=3.11 -y
+conda create -n qwen-vllm-server python=3.11 -y   # or your custom env name
 conda activate qwen-vllm-server
 pip install -r qwen_vllm_server/requirements.txt
 ```
