@@ -43,6 +43,7 @@ server:
   launcher: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/launch_server.py
   pid_file: source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/.qwen_server.pid
   startup_timeout_seconds: 300
+  conda_env: vllm_server
 
 pipeline:
   max_iterations: 3

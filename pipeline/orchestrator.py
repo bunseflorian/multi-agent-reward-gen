@@ -1,10 +1,14 @@
-"""Coordinate Planner → Coder → Reviewer → Tester → Critic iterations."""
+"""LangGraph-based orchestrator: Planner → Coder → Reviewer → Tester → Critic."""
 
 from __future__ import annotations
 
+from dataclasses import replace as dc_replace
 from pathlib import Path
+from typing import Any, TypedDict
 
-from ..configs import config_get
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command
+
 from ..core import (
     CodeArtifact,
     CodeReviewArtifact,
@@ -13,329 +17,69 @@ from ..core import (
     PlanArtifact,
     PPOConfig,
     PPOReport,
-    RunHooks,
-    RunState,
     RunStatus,
     TaskBrief,
     TestReport,
 )
 from ..llm import QwenApiError, QwenClient
-from .coder import CoderAgent
-from .critic import CriticAgent
+from . import agents
 from .formatting import format_ppo_live_log
-from .logger import RunRecorder, null_logger
-from .planner import PlannerAgent
-from .reviewer import ReviewerAgent
+from .logger import RunRecorder
 from .tester import TesterAgent
 
 
-class MultiAgentRewardSystem:
-    """Coordinates all agent roles for iterative reward-code generation."""
-
-    def __init__(
-        self,
-        client: QwenClient,
-        *,
-        recorder: RunRecorder | None = None,
-        planner: PlannerAgent | None = None,
-        coder: CoderAgent | None = None,
-        reviewer: ReviewerAgent | None = None,
-        tester: TesterAgent | None = None,
-        critic: CriticAgent | None = None,
-        agent_reasoning: dict[str, bool] | None = None,
-    ):
-        self.client = client
-        self.logger = recorder or null_logger()
-        reasoning = agent_reasoning or {}
-        self.planner = planner or PlannerAgent(client, enable_thinking=reasoning.get("planner", False), logger=self.logger)
-        self.coder = coder or CoderAgent(client, enable_thinking=reasoning.get("coder", False), logger=self.logger)
-        self.reviewer = reviewer or ReviewerAgent(client, enable_thinking=reasoning.get("reviewer", False), logger=self.logger)
-        self.tester = tester or TesterAgent()
-        self.critic = critic or CriticAgent(client, enable_thinking=reasoning.get("critic", False), logger=self.logger)
-
-    def run(
-        self,
-        task_brief: TaskBrief,
-        *,
-        max_iterations: int | None = None,
-        max_rl_iterations: int | None = None,
-        ppo_config: PPOConfig | None = None,
-        run_dir: str | None = None,
-        stop_after_plan: bool = False,
-        initial_plan: PlanArtifact | None = None,
-    ) -> RunState:
-        """Run the full Planner → Coder → Reviewer → PPO → Critic loop."""
-
-        ppo_config = ppo_config or PPOConfig()
-        max_iterations = max_iterations if max_iterations is not None else int(config_get("pipeline.max_iterations"))
-        if max_rl_iterations is None:
-            max_rl_iterations = config_get("pipeline.max_rl_iterations")
-        hooks = ppo_config.hooks
-        state = RunState(task_brief=task_brief, rl_training_skipped=not ppo_config.run_rl_training)
-        state.recorder = self.logger
-
-        if initial_plan is None:
-            if hooks.status_callback is not None:
-                hooks.status_callback("Planner")
-            plan = self._plan_or_fail(task_brief, state)
-            if plan is None:
-                return state
-        else:
-            plan = initial_plan
-
-        state.plan = plan
-        state.status = RunStatus.PLANNED
-
-        if stop_after_plan:
-            return state
-
-        loop = _IterationLoop(
-            system=self,
-            state=state,
-            task_brief=task_brief,
-            plan=plan,
-            ppo_config=ppo_config,
-            run_dir=run_dir,
-            max_iterations=max_iterations,
-            target_rl_runs=max_rl_iterations if max_rl_iterations is not None else max_iterations,
-            hooks=hooks,
-        )
-        return loop.execute()
-
-    def _plan_or_fail(self, task_brief: TaskBrief, state: RunState) -> PlanArtifact | None:
-        try:
-            return self.planner.plan(task_brief)
-        except QwenApiError:
-            raise
-        except Exception as exc:
-            state.status = RunStatus.FAILED_PLANNING
-            state.final_report = TestReport(
-                passed=False,
-                errors=[f"Planner failed: {type(exc).__name__}: {exc}"],
-                metadata={"agent": "planner", "stage": "planning"},
-            )
-            return None
+class AgentState(TypedDict):
+    # ── read-only config (set once at graph entry) ──
+    task_brief: TaskBrief
+    ppo_config: PPOConfig
+    max_iterations: int
+    max_rl_iterations: int
+    max_format_retries: int
+    stop_after_plan: bool
+    run_dir: str | None
+    agent_reasoning: dict[str, bool]
+    enable_thinking: dict[str, bool]
+    # ── agent outputs ──
+    plan: PlanArtifact | None
+    code: CodeArtifact | None
+    code_review: CodeReviewArtifact | None
+    ppo_report: PPOReport | None
+    critique: CritiqueArtifact | None
+    # ── loop control ──
+    reviewer_feedback: str | None
+    critic_feedback: str | None
+    iteration: int
+    rl_runs_started: int
+    reviewer_blocked_rl_attempts: int
+    format_retries: int
+    # ── final result ──
+    status: str                   # RunStatus.value string
+    final_code: CodeArtifact | None
+    final_report: TestReport | None
+    final_ppo_report: PPOReport | None
+    iterations: list              # list[IterationRecord]
+    recorder: Any                 # RunRecorder, not serialized by LangGraph
 
 
-class _IterationLoop:
-    """Stateful helper that drives the iterative agent loop."""
+# ── helpers ───────────────────────────────────────────────────────────────────
 
-    def __init__(
-        self,
-        *,
-        system: MultiAgentRewardSystem,
-        state: RunState,
-        task_brief: TaskBrief,
-        plan: PlanArtifact,
-        ppo_config: PPOConfig,
-        run_dir: str | None,
-        max_iterations: int,
-        target_rl_runs: int,
-        hooks: RunHooks,
-    ):
-        self.system = system
-        self.state = state
-        self.task_brief = task_brief
-        self.plan = plan
-        self.ppo_config = ppo_config
-        self.run_dir = run_dir
-        self.max_iterations = max_iterations
-        self.target_rl_runs = target_rl_runs
-        self.max_format_retries = int(config_get("pipeline.max_format_retries"))
-        self.hooks = hooks
-
-        self.reviewer_feedback: str | None = None
-        self.critic_feedback: str | None = None
-        self.previous_code: CodeArtifact | None = None
-        self.rl_runs_started = 0
-        self.reviewer_blocked_rl_attempts = 0
-        self.format_retries = 0
-        self.iteration = 0
-
-    # ------------------------------------------------------------------ loop
-
-    def execute(self) -> RunState:
-        while self._should_continue():
-            self.iteration += 1
-
-            try:
-                code, code_review, test_report = self._generate_and_review()
-                ppo_report, critique = self._test_and_critique(code, test_report)
-                self.format_retries = 0
-            except ValueError as exc:
-                if self._handle_format_error(exc):
-                    return self.state
-                continue
-
-            self.state.iterations.append(
-                IterationRecord(
-                    iteration=self.iteration,
-                    plan=self.plan,
-                    code=code,
-                    code_review=code_review,
-                    test_report=test_report,
-                    ppo_report=ppo_report,
-                    critique=critique,
-                )
-            )
-            self.previous_code = code
-
-            if self._evaluate_iteration(code, code_review, test_report, ppo_report, critique):
-                return self.state
-
-        return self._finalize_after_loop()
-
-    # ---------------------------------------------------------------- helpers
-
-    def _should_continue(self) -> bool:
-        if self.ppo_config.run_rl_training:
-            return self.rl_runs_started < self.target_rl_runs
-        return self.iteration < self.max_iterations
-
-    def _generate_and_review(self) -> tuple[CodeArtifact, CodeReviewArtifact, TestReport]:
-        self._notify(f"Coder (iteration {self.iteration})")
-        code = self.system.coder.write_code(
-            self.plan,
-            previous_code=self.previous_code,
-            reviewer_feedback=self.reviewer_feedback,
-            critic_feedback=self.critic_feedback,
-        )
-        self.state.status = RunStatus.CODE_GENERATED
-
-        self._notify(f"Reviewer (iteration {self.iteration})")
-        code_review = self.system.reviewer.review(self.plan, code)
-        test_report = TestReport(
-            passed=code_review.passed,
-            errors=code_review.errors,
-            warnings=code_review.warnings,
-            metadata={"agent": "reviewer", "stage": "static_llm_validation"},
-        )
-        self.state.status = (
-            RunStatus.VALIDATED_STATIC if code_review.passed else RunStatus.FAILED_VALIDATION
-        )
-        return code, code_review, test_report
-
-    def _test_and_critique(
-        self,
-        code: CodeArtifact,
-        test_report: TestReport,
-    ) -> tuple[PPOReport | None, CritiqueArtifact | None]:
-        if not test_report.passed:
-            return None, None
-
-        if self.ppo_config.run_rl_training:
-            self.rl_runs_started += 1
-            self._notify(f"PPO Training (iteration {self.iteration})")
-            self.state.status = RunStatus.PPO_RUNNING
-            ppo_run_dir = _ppo_run_dir(self.run_dir, self.rl_runs_started)
-        else:
-            self.state.status = RunStatus.TESTED
-            ppo_run_dir = self.run_dir
-
-        ppo_config = self._ppo_config_with_recording()
-        ppo_report = self.system.tester.test(self.task_brief, code, ppo_config, ppo_run_dir)
-        if ppo_report is not None:
-            self.system.logger.write(format_ppo_live_log(ppo_report), agent="ppo", kind="output")
-        self.state.status = RunStatus.PPO_TESTED if self.ppo_config.run_rl_training else RunStatus.TESTED
-
-        if ppo_report.status == "skipped":
-            return ppo_report, None
-
-        self._notify(f"Critic (iteration {self.iteration})")
-        critique = self.system.critic.critique(self.plan, code, ppo_report)
-        return ppo_report, critique
-
-    def _handle_format_error(self, exc: ValueError) -> bool:
-        self.format_retries += 1
-        if self.format_retries >= self.max_format_retries:
-            self.state.status = RunStatus.FAILED_FORMAT
-            self.state.final_report = TestReport(
-                passed=False,
-                errors=[f"Output format error: {exc}"],
-                metadata={"stage": "format_check", "format_retries": self.format_retries},
-            )
-            return True
-        self._notify(f"Format error (retry {self.format_retries}/{self.max_format_retries}): {exc}")
-        return False
-
-    def _evaluate_iteration(
-        self,
-        code: CodeArtifact,
-        code_review: CodeReviewArtifact,
-        test_report: TestReport,
-        ppo_report: PPOReport | None,
-        critique: CritiqueArtifact | None,
-    ) -> bool:
-        if not test_report.passed:
-            self.reviewer_feedback = code_review.feedback
-            self.critic_feedback = None
-            if self.ppo_config.run_rl_training:
-                self.reviewer_blocked_rl_attempts += 1
-                if self.reviewer_blocked_rl_attempts >= self.max_iterations:
-                    self.state.status = RunStatus.FAILED_VALIDATION
-                    _finalize_state(
-                        self.state,
-                        code,
-                        _reviewer_blocked_report(
-                            test_report,
-                            self.max_iterations,
-                            self.reviewer_blocked_rl_attempts,
-                        ),
-                        None,
-                    )
-                    return True
-            return False
-        self.reviewer_blocked_rl_attempts = 0
-
-        if ppo_report is not None and ppo_report.status == "skipped":
-            self.state.status = RunStatus.ACCEPTED_STATIC
-            _finalize_state(self.state, code, test_report, ppo_report)
-            return True
-
-        if ppo_report is not None and critique is not None and not critique.should_retry:
-            self.state.status = RunStatus.ACCEPTED_RL
-            _finalize_state(self.state, code, test_report, ppo_report)
-            return True
-
-        if self.ppo_config.run_rl_training and self.rl_runs_started >= self.target_rl_runs:
-            return False
-
-        self.state.status = RunStatus.CRITIC_FEEDBACK
-        self.reviewer_feedback = None
-        self.critic_feedback = critique.feedback if critique is not None else None
-        return False
-
-    def _finalize_after_loop(self) -> RunState:
-        self.state.status = (
-            RunStatus.FAILED_PPO if self.ppo_config.run_rl_training else RunStatus.FAILED_STATIC
-        )
-        if self.state.iterations:
-            last = self.state.iterations[-1]
-            _finalize_state(self.state, last.code, last.test_report, last.ppo_report)
-        return self.state
-
-    def _notify(self, message: str) -> None:
-        if self.hooks.status_callback is not None:
-            self.hooks.status_callback(message)
-
-    def _ppo_config_with_recording(self) -> PPOConfig:
-        return self.ppo_config
+def _budget_exhausted(state: AgentState) -> bool:
+    if state["ppo_config"].run_rl_training:
+        return state["rl_runs_started"] >= state["max_rl_iterations"]
+    return state["iteration"] >= state["max_iterations"]
 
 
-
-def _finalize_state(
-    state: RunState,
-    code: CodeArtifact,
-    report: TestReport,
-    ppo_report: PPOReport | None,
-) -> None:
-    state.final_code = code
-    state.final_report = report
-    state.final_ppo_report = ppo_report
+def _make_test_report(code_review: CodeReviewArtifact) -> TestReport:
+    return TestReport(
+        passed=code_review.passed,
+        errors=code_review.errors,
+        warnings=code_review.warnings,
+        metadata={"agent": "reviewer", "stage": "static_llm_validation"},
+    )
 
 
 def _reviewer_blocked_report(
-    test_report: TestReport,
+    base_report: TestReport,
     max_iterations: int,
     reviewer_blocked_rl_attempts: int,
 ) -> TestReport:
@@ -343,14 +87,225 @@ def _reviewer_blocked_report(
         passed=False,
         errors=[
             f"RL training could not start because the reviewer rejected {max_iterations} generated candidates.",
-            *test_report.errors,
+            *base_report.errors,
         ],
-        warnings=test_report.warnings,
-        metadata={**test_report.metadata, "reviewer_blocked_rl_attempts": reviewer_blocked_rl_attempts},
+        warnings=base_report.warnings,
+        metadata={**base_report.metadata, "reviewer_blocked_rl_attempts": reviewer_blocked_rl_attempts},
     )
 
 
-def _ppo_run_dir(run_dir: str | None, rl_run_index: int) -> str | None:
-    if run_dir is None:
-        return None
-    return str(Path(run_dir) / f"rl_run_{rl_run_index:02d}")
+# ── graph factory ─────────────────────────────────────────────────────────────
+
+def build_graph(client: QwenClient, *, recorder: RunRecorder):  # noqa: ARG001
+    """Build and compile the reward-code generation StateGraph."""
+
+    def planner_node(state: AgentState) -> Command:
+        if state["plan"] is not None:
+            return Command(goto="coder")
+        try:
+            plan = agents.planner(
+                client, state["task_brief"],
+                enable_thinking=state["enable_thinking"].get("planner", False),
+                logger=state["recorder"],
+            )
+            return Command(
+                update={"plan": plan, "status": RunStatus.PLANNED.value},
+                goto=END if state["stop_after_plan"] else "coder",
+            )
+        except QwenApiError:
+            raise
+        except Exception as exc:
+            return Command(
+                update={
+                    "status": RunStatus.FAILED_PLANNING.value,
+                    "final_report": TestReport(
+                        passed=False,
+                        errors=[f"Planner failed: {type(exc).__name__}: {exc}"],
+                        metadata={"agent": "planner", "stage": "planning"},
+                    ),
+                },
+                goto=END,
+            )
+
+    def coder_node(state: AgentState) -> Command:
+        iteration = state["iteration"] + 1
+        last_exc: ValueError | None = None
+        for _ in range(max(1, state["max_format_retries"])):
+            try:
+                code = agents.coder(
+                    client,
+                    state["plan"],
+                    state["code"],
+                    state["reviewer_feedback"],
+                    state["critic_feedback"],
+                    enable_thinking=state["enable_thinking"].get("coder", False),
+                    logger=state["recorder"],
+                )
+                return Command(
+                    update={"code": code, "iteration": iteration, "status": RunStatus.CODE_GENERATED.value, "format_retries": 0},
+                    goto="reviewer",
+                )
+            except ValueError as exc:
+                last_exc = exc
+        return Command(
+            update={
+                "iteration": iteration,
+                "status": RunStatus.FAILED_FORMAT.value,
+                "final_report": TestReport(passed=False, errors=[f"Output format error: {last_exc}"], metadata={"stage": "format_check"}),
+            },
+            goto=END,
+        )
+
+    def reviewer_node(state: AgentState) -> Command:
+        code_review = agents.reviewer(
+            client,
+            state["plan"],
+            state["code"],
+            enable_thinking=state["enable_thinking"].get("reviewer", False),
+            logger=state["recorder"],
+        )
+        if code_review.passed:
+            return Command(
+                update={
+                    "code_review": code_review,
+                    "status": RunStatus.VALIDATED_STATIC.value,
+                    "reviewer_feedback": None,
+                    "reviewer_blocked_rl_attempts": 0,
+                },
+                goto="tester",
+            )
+        blocked = state["reviewer_blocked_rl_attempts"] + 1
+        update = {
+            "code_review": code_review,
+            "status": RunStatus.FAILED_VALIDATION.value,
+            "reviewer_feedback": code_review.feedback,
+            "reviewer_blocked_rl_attempts": blocked,
+        }
+        if state["ppo_config"].run_rl_training and blocked >= state["max_iterations"]:
+            return Command(update=update, goto="finalizer")
+        if _budget_exhausted(state):
+            return Command(update=update, goto="finalizer")
+        return Command(update=update, goto="coder")
+
+    def tester_node(state: AgentState) -> Command:
+        ppo_config = state["ppo_config"]
+        if ppo_config.run_rl_training:
+            rl_runs_started = state["rl_runs_started"] + 1
+            ppo_run_dir = (
+                str(Path(state["run_dir"]) / f"rl_run_{rl_runs_started:02d}")
+                if state["run_dir"] else None
+            )
+        else:
+            rl_runs_started = state["rl_runs_started"]
+            ppo_run_dir = state["run_dir"]
+
+        ppo_report = TesterAgent().test(state["task_brief"], state["code"], ppo_config, ppo_run_dir)
+        if ppo_report is not None:
+            state["recorder"].write(format_ppo_live_log(ppo_report), agent="ppo", kind="output")
+
+        test_report = _make_test_report(state["code_review"])
+        record = IterationRecord(
+            iteration=state["iteration"],
+            plan=state["plan"],
+            code=state["code"],
+            code_review=state["code_review"],
+            test_report=test_report,
+            ppo_report=ppo_report,
+            critique=None,
+        )
+        update = {
+            "ppo_report": ppo_report,
+            "status": RunStatus.PPO_TESTED.value if ppo_config.run_rl_training else RunStatus.TESTED.value,
+            "rl_runs_started": rl_runs_started,
+            "iterations": state["iterations"] + [record],
+        }
+        if ppo_report.status == "skipped":
+            update.update({
+                "status": RunStatus.ACCEPTED_STATIC.value,
+                "final_code": state["code"],
+                "final_report": test_report,
+                "final_ppo_report": ppo_report,
+            })
+            return Command(update=update, goto=END)
+        return Command(update=update, goto="critic")
+
+    def critic_node(state: AgentState) -> Command:
+        ppo_report = state["ppo_report"]
+        if ppo_report is None or ppo_report.status == "skipped":
+            critique = CritiqueArtifact(
+                feedback="",
+                should_retry=False,
+                metadata={"agent": "critic", "source": "ppo_not_run", "skipped": True},
+            )
+        else:
+            critique = agents.critic(
+                client,
+                state["plan"],
+                state["code"],
+                ppo_report,
+                enable_thinking=state["enable_thinking"].get("critic", False),
+                logger=state["recorder"],
+            )
+        last = state["iterations"][-1]
+        update = {
+            "critique": critique,
+            "iterations": state["iterations"][:-1] + [dc_replace(last, critique=critique)],
+        }
+        if not critique.should_retry:
+            update.update({
+                "critic_feedback": None,
+                "status": RunStatus.ACCEPTED_RL.value,
+                "final_code": state["code"],
+                "final_report": _make_test_report(state["code_review"]),
+                "final_ppo_report": ppo_report,
+            })
+            return Command(update=update, goto=END)
+        update.update({
+            "critic_feedback": critique.feedback,
+            "reviewer_feedback": None,
+            "status": RunStatus.CRITIC_FEEDBACK.value,
+        })
+        if _budget_exhausted(state):
+            return Command(update=update, goto="finalizer")
+        return Command(update=update, goto="coder")
+
+    def finalizer_node(state: AgentState) -> dict:
+        ppo_config = state["ppo_config"]
+        if (
+            ppo_config.run_rl_training
+            and state["code_review"] is not None
+            and not state["code_review"].passed
+            and state["reviewer_blocked_rl_attempts"] >= state["max_iterations"]
+        ):
+            base_report = _make_test_report(state["code_review"])
+            return {
+                "status": RunStatus.FAILED_VALIDATION.value,
+                "final_code": state["code"],
+                "final_report": _reviewer_blocked_report(
+                    base_report, state["max_iterations"], state["reviewer_blocked_rl_attempts"]
+                ),
+                "final_ppo_report": None,
+            }
+        terminal = RunStatus.FAILED_PPO if ppo_config.run_rl_training else RunStatus.FAILED_STATIC
+        if state["iterations"]:
+            last = state["iterations"][-1]
+            return {
+                "status": terminal.value,
+                "final_code": last.code,
+                "final_report": last.test_report,
+                "final_ppo_report": last.ppo_report,
+            }
+        return {"status": terminal.value}
+
+    # ── assemble graph ────────────────────────────────────────────────────────
+
+    graph = StateGraph(AgentState)
+    graph.add_node("planner", planner_node)
+    graph.add_node("coder", coder_node)
+    graph.add_node("reviewer", reviewer_node)
+    graph.add_node("tester", tester_node)
+    graph.add_node("critic", critic_node)
+    graph.add_node("finalizer", finalizer_node)
+    graph.add_edge(START, "planner")
+    graph.add_edge("finalizer", END)
+    return graph.compile()

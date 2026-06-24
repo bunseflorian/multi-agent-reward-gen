@@ -27,7 +27,20 @@ import re
 from types import SimpleNamespace
 from typing import Any
 
-from ..core import TestReport
+try:
+    from ..core import TestReport
+except ImportError:
+    from dataclasses import dataclass, field
+    from typing import Any
+
+    @dataclass
+    class TestReport:  # type: ignore[no-redef]
+        passed: bool
+        errors: list[str] = field(default_factory=list)
+        warnings: list[str] = field(default_factory=list)
+        metadata: dict[str, Any] = field(default_factory=dict)
+
+    TestReport.__test__ = False
 
 
 # ---------------------------------------------------------------------------
@@ -538,3 +551,27 @@ def _root_name(node: ast.Attribute) -> str:
     while isinstance(node, ast.Attribute):
         node = node.value
     return node.id if isinstance(node, ast.Name) else ""
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point: called as ``python -m ...static_check`` by the agent env
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import json
+    import sys
+
+    payload = json.loads(sys.stdin.read())
+    report = static_check(
+        payload["code"],
+        allowed_tensors=payload.get("allowed_tensors"),
+    )
+    json.dump(
+        {
+            "passed": report.passed,
+            "errors": report.errors,
+            "warnings": report.warnings,
+            "metadata": report.metadata,
+        },
+        sys.stdout,
+    )

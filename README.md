@@ -65,25 +65,34 @@ User Prompt
 
 ## Installation
 
-### 1. IsaacLab environment
+Three conda environments are used. Set them up in any order.
+
+### 1. IsaacLab environment (`isaaclab`)
 
 Follow the [official IsaacLab installation guide](https://isaac-sim.github.io/IsaacLab/source/setup/installation/index.html). The environment can have any name — if it differs from `isaaclab`, update `paths.isaaclab_conda_env` in [`configs/app.yaml`](configs/app.yaml) or set the env var `QWEN_ISAACLAB_CONDA_ENV=<name>`.
 
-Install the task package and UI dependencies (from the IsaacLab root):
+Install the task package (from the IsaacLab root):
 ```bash
-conda activate isaaclab          # or your custom env name
+conda activate isaaclab
 pip install -e source/isaaclab_tasks
-pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-isaaclab.txt
 ```
 
-### 2. vLLM server environment
+### 2. Agent pipeline environment (`multi_agent_framework`)
 
-The default name is `qwen-vllm-server`. If you use a different name, update `launch_server.py` accordingly or activate the environment manually before running it.
+Runs the LangGraph orchestrator, all agents, and the Streamlit UI. PPO training is delegated to the `isaaclab` env automatically.
 
 ```bash
-conda create -n qwen-vllm-server python=3.11 -y   # or your custom env name
-conda activate qwen-vllm-server
-pip install -r qwen_vllm_server/requirements.txt
+conda create -n multi_agent_framework python=3.11 -y
+conda activate multi_agent_framework
+pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-agent.txt
+```
+
+### 3. vLLM server environment (`vllm_server`)
+
+```bash
+conda create -n vllm_server python=3.11 -y
+conda activate vllm_server
+pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/requirements.txt
 ```
 
 ---
@@ -95,7 +104,7 @@ The vLLM server is managed via [`qwen_vllm_server/`](qwen_vllm_server/), which i
 ### Download the model
 
 ```bash
-conda activate qwen-vllm-server
+conda activate vllm_server
 python -c "
 from huggingface_hub import snapshot_download
 snapshot_download(
@@ -110,7 +119,7 @@ Update `model_path` in [`qwen_vllm_server/config.yaml`](qwen_vllm_server/config.
 ### Start the server
 
 ```bash
-conda activate qwen-vllm-server
+conda activate vllm_server
 python qwen_vllm_server/launch_server.py
 ```
 
@@ -175,9 +184,8 @@ Any config value can also be overridden via `QWEN_*` environment variables:
 ### Run the Streamlit UI
 
 ```bash
-conda activate isaaclab
-cd /path/to/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2
-streamlit run ui/app.py
+conda activate multi_agent_framework
+streamlit run source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/ui/app.py
 ```
 
 The UI opens in your browser at `http://localhost:8501`.

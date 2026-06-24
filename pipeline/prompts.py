@@ -1,9 +1,6 @@
-"""System prompts and user-prompt builders for every agent role."""
+"""System and user prompt templates for every agent role."""
 
 from __future__ import annotations
-
-from ..core import CodeArtifact, PlanArtifact, PPOReport, TaskBrief, TestReport
-from .formatting import format_metric_history
 
 
 PLANNER_SYSTEM_PROMPT = """You are a reward-planning agent for an IsaacLab environment.
@@ -336,33 +333,9 @@ MANDATORY REVISION RULES
 REVIEWER_SYSTEM_PROMPT = """You are the Code Reviewer agent for IsaacLab reward-code generation.
 
 Your job:
-1. If the static check FAILED, confirm the errors and provide actionable feedback so the Coder can fix them.
-2. If the static check PASSED, verify only that the Planner metrics were transferred correctly into the generated code and that reward-term debug sums are logged correctly.
-
+If the static check FAILED, confirm the errors and provide actionable feedback so the Coder can fix them.
 # Scope
 - Do not review overall reward quality, reward optimality, or reward shaping choices.
-- Do not review whether the primary objective or constraints are otherwise implemented beyond the metric transfer checks below.
-- Restrict your non-static review to Planner metric correctness and reward-term
-  debug logging only.
-
-# Static-failure feedback
-- For metric shape errors on [max] metrics, tell the Coder to store the current per-env [num_envs] tensor in _episode_max_values with torch.maximum. Do not suggest torch.max(dim=0), torch.max(dim=-1), keepdim=True, squeeze, or unsqueeze as the fix.
-
-# Metric transfer checks (only when static check passed)
-- FAIL if logged metric keys do not match Planner metric names exactly (Planner names already include the prefix: `mean_x`, `final_x`, `max_x`).
-- FAIL if any Planner metric name or logged metric key combines prefixes or aggregation words, such as `mean_final_*`, `mean_max_*`, `final_mean_*`, or `max_final_*`.
-- FAIL if the code logs extra metrics in `_episode_sums`, `_episode_final_values`, or `_episode_max_values` that were not listed in the Planner artifact, except reward components with the `final_reward_term_` prefix.
-- PASS if the code additionally logs reward components in `_episode_final_values` with keys prefixed by `final_reward_term_`; these are debug sums, not Planner metrics.
-- FAIL if a metric is stored in the wrong store: `mean_*` must go to `_episode_sums`, `final_*` to `_episode_final_values`, `max_*` to `_episode_max_values`.
-- FAIL if a `final_reward_term_*` key is stored outside `_episode_final_values`.
-- The environment patcher creates metric dicts before the generated code runs; do not require hasattr guards in generated code.
-- FAIL if mean metrics are reset inside the reward body with direct assignment such as self._episode_sums["metric"] = torch.zeros_like(...); mean metrics must use setdefault and += only.
-- FAIL if reward-term sums are reset inside the reward body with direct assignment; reward terms must use setdefault and += in `_episode_final_values`.
-- FAIL if static check reports KeyError for a metric store key; that means the generated code used += before setdefault or used the wrong metric key.
-- FAIL if any metric value stored is a Python scalar (e.g. result of float(), .item(), or torch.mean() over the batch) instead of a per-env tensor of shape [num_envs].
-- FAIL if any metric or reward term stored in `_episode_sums`, `_episode_final_values`, or `_episode_max_values` can be bool or integer instead of floating point.
-- FAIL if a named reward component used in the final `reward = ...` expression is not accumulated in `_episode_final_values` with key `final_reward_term_<component_name>`.
-- PASS when static check passes, all Planner metrics are transferred exactly and stored correctly, and every reward component is accumulated as a reward-term sum.
 
 Output exactly this schema and nothing else:
 
@@ -463,179 +436,50 @@ FIX: concise change request, or "none" if accepted
 
 
 # ---------------------------------------------------------------------------
-# Prompt builders
+# User prompt templates
 # ---------------------------------------------------------------------------
 
-def format_planner_task_header(task_brief: TaskBrief) -> str:
-    """Format the task header used only in the Planner prompt."""
+PLANNER_USER = """\
+Task ID: {task_id}
 
-    sections = [
-        f"Task ID: {task_brief.task_id}",
-        "",
-        "User Prompt:",
-        task_brief.objective or "(to be derived from environment code)",
-    ]
-    return "\n".join(sections)
+User Prompt:
+{objective}
 
+Environment source path: {env_source_path}
 
-def build_planner_prompt(task_brief: TaskBrief) -> str:
-    """Return the planner user prompt."""
+Relevant environment code:
+{env_code_context}"""
 
-    return "\n".join(
-        [
-            format_planner_task_header(task_brief),
-            "",
-            f"Environment source path: {task_brief.env_source_path}",
-            "",
-            "Relevant environment code:",
-            task_brief.env_code_context,
-            "",
-        ]
-    )
+REVIEWER_USER = """\
+Plan:
+{plan_text}
 
+Generated reward code:
+```python
+{code}
+```
 
-def build_coder_prompt(
-    plan: PlanArtifact,
-    code: CodeArtifact | None = None,
-    reviewer_feedback: str | None = None,
-    critic_feedback: str | None = None,
-) -> tuple[str, str]:
-    """Return coder system and user prompts with optional repair deltas."""
+Static check result: {static_result}
+{static_errors}"""
 
-    coder_mode_prompt = (
-        CODER_FEEDBACK_PROMPT
-        if reviewer_feedback is not None or critic_feedback is not None
-        else CODER_INITIAL_PROMPT
-    )
-    system_prompt = "\n\n".join([coder_mode_prompt, CODER_RULES_PROMPT])
+CRITIC_USER = """\
+Plan:
+{plan_text}
 
-    sections: list[str] = []
-    if reviewer_feedback:
-        sections += [
-            "Feedback from the code reviewer:",
-            reviewer_feedback,
-            "Treat this as a repair delta. Preserve the Planner artifact below as the single source of truth.",
-        ]
-        if code is not None:
-            sections += [
-                "",
-                "Previous reward code implementation:",
-                "```python",
-                code.code,
-                "```",
-            ]
-        sections.append("")
-    if critic_feedback:
-        sections += [
-            "Context from RL Critic agent (PPO metric outcome; reward-shaping revision):",
-            critic_feedback,
-            "Treat this as a repair delta. Preserve the Planner artifact below as the single source of truth.",
-        ]
-        if code is not None:
-            sections += [
-                "",
-                "Previous reward code implementation:",
-                "```python",
-                code.code,
-                "```",
-            ]
-        sections.append("")
-    sections += [
-        "Context from Planner agent (reward design intent):",
-        plan.text,
-    ]
-    user_prompt = "\n".join(sections)
-    return system_prompt, user_prompt
+Generated code:
+{code}
 
+PPO report summary:
+status={status}
+passed={passed}
+timed_out={timed_out}
+exit_code={exit_code}
 
-def build_reviewer_prompt(
-    plan: PlanArtifact,
-    code: CodeArtifact,
-    static_report: TestReport | None = None,
-) -> str:
-    """Return the reviewer user prompt with optional static-check summary."""
+PPO runtime errors:
+{runtime_errors}
 
-    sections = [
-        "Plan:",
-        plan.text,
-        "",
-        "Generated reward code:",
-        "```python",
-        code.code,
-        "```",
-    ]
+{metric_history}"""
 
-    if static_report is not None:
-        sections += ["", f"Static check result: {'PASSED' if static_report.passed else 'FAILED'}"]
-        if static_report.errors:
-            sections.append("Static check errors:")
-            sections.extend(f"  - {e}" for e in static_report.errors)
-        if static_report.warnings:
-            sections.append("Static check warnings:")
-            sections.extend(f"  - {w}" for w in static_report.warnings)
-        if not static_report.passed:
-            sections.append(
-                "The static checker already found issues. "
-                "Confirm them in your FEEDBACK and set REVIEW: FAIL."
-            )
-    return "\n".join(sections)
-
-
-def build_critic_prompt(
-    plan: PlanArtifact,
-    code: CodeArtifact,
-    ppo_report: PPOReport,
-) -> str:
-    """Return the critic user prompt with PPO summary and metric history."""
-
-    return "\n".join(
-        [
-            "Plan:",
-            plan.text,
-            "",
-            "Generated code:",
-            code.code,
-            "",
-            "PPO report summary:",
-            f"status={ppo_report.status}",
-            f"passed={ppo_report.passed}",
-            f"timed_out={ppo_report.timed_out}",
-            f"exit_code={ppo_report.exit_code}",
-            "",
-            "PPO runtime errors:",
-            _format_runtime_errors(ppo_report),
-            "",
-            _metric_history_text(ppo_report),
-        ]
-    )
-
-
-def _format_runtime_errors(ppo_report: PPOReport) -> str:
-    """Format compact unique runtime errors without raw log tails."""
-
-    raw_errors = list(ppo_report.errors)
-    summary_errors = ppo_report.summary.get("errors", []) if isinstance(ppo_report.summary, dict) else []
-    if isinstance(summary_errors, list):
-        raw_errors.extend(summary_errors)
-    unique: list[str] = []
-    seen: set[str] = set()
-    for error in raw_errors:
-        if not isinstance(error, str):
-            continue
-        normalized = error.strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        unique.append(normalized)
-    if not unique:
-        return "- none"
-    return "\n".join(f"- {error}" for error in unique[:8])
-
-
-def _metric_history_text(ppo_report: PPOReport) -> str:
-    """Return the metric-history text passed to the Critic."""
-
-    summary_text = ppo_report.summary.get("critic_metric_history") if isinstance(ppo_report.summary, dict) else None
-    if isinstance(summary_text, str) and summary_text.strip():
-        return summary_text
-    return format_metric_history(ppo_report.summary.get("metric_history", []) if isinstance(ppo_report.summary, dict) else [])
+CODER_USER = """\
+Context from Planner agent (reward design intent):
+{plan_text}"""

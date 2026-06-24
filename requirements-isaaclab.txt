@@ -4,7 +4,6 @@
 #   conda activate isaaclab
 #   pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-isaaclab.txt
 
-streamlit>=1.54.0
-altair>=6.0.0
-pandas>=2.3.0
-PyYAML>=6.0.2
+# Nothing extra needed beyond what IsaacLab already installs.
+# Agent pipeline, UI, and LangGraph now run in the separate 'qwen-agent' env.
+# See requirements-agent.txt.

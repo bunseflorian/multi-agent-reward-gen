@@ -6,8 +6,9 @@ import urllib.request
 from pathlib import Path
 
 from ..configs import build_ppo_config, config_get
-from ..pipeline import run_task
-from ..core import PPOConfig, RunHooks, RunStatus
+from ..core import PPOConfig, RunHooks, RunState, RunStatus, TaskBrief
+from ..llm import QwenClient, load_qwen_config
+from ..pipeline import build_graph, build_initial_state, run_task
 from ..pipeline import run_dir_name
 from ..server import start_server, stop_server
 from .task_form import TaskFormValues
@@ -26,10 +27,8 @@ def run_generation(
     tmp_run_dir.mkdir(parents=True, exist_ok=True)
     status_placeholder = st.empty()
 
-    def _update_status(agent: str) -> None:
-        status_placeholder.info(f"Running: **{agent}**")
-
     try:
+        status_placeholder.info("Running: **Planner**")
         state = run_task(
             max_iterations=form.max_iterations,
             max_rl_iterations=form.max_rl_iterations,
@@ -38,7 +37,6 @@ def run_generation(
             ppo_config=_build_ppo_config(form, hooks=RunHooks()),
             run_dir=tmp_run_dir,
             agent_reasoning=form.agent_reasoning,
-            status_callback=_update_status,
             stop_after_plan=True,
         )
         status_placeholder.empty()
@@ -94,7 +92,7 @@ def render_pending_plan(st, *, base_url: str) -> bool:
 
 def _continue_pending_plan(st, pending: dict, *, base_url: str) -> None:
     form: TaskFormValues = pending["form"]
-    planned_state = pending["state"]
+    planned_state: RunState = pending["state"]
     tmp_run_dir: Path = pending["run_dir"]
 
     progress_box = st.empty()
@@ -122,33 +120,47 @@ def _continue_pending_plan(st, pending: dict, *, base_url: str) -> None:
 
     status_placeholder = st.empty()
 
-    def _update_status(agent: str) -> None:
-        status_placeholder.info(f"Running: **{agent}**")
-
     try:
-        state = run_task(
+        client = QwenClient(load_qwen_config())
+        recorder = planned_state.recorder
+        task_brief: TaskBrief = planned_state.task_brief
+
+        ppo_config = build_ppo_config(
+            run_rl_training=form.run_rl,
+            num_envs=form.ppo_kwargs.get("num_envs"),
+            max_iterations=form.ppo_kwargs.get("max_iterations"),
+            timeout_seconds=form.ppo_kwargs.get("timeout_seconds"),
+            headless=form.ppo_kwargs.get("headless", True),
+            hooks=RunHooks(
+                ppo_progress_callback=show_ppo_progress if form.run_rl else None,
+                pre_training_callback=pre_cb,
+                post_training_callback=post_cb,
+            ),
+        )
+
+        compiled = build_graph(client, recorder=recorder)
+        initial_state = build_initial_state(
+            task_brief=task_brief,
+            ppo_config=ppo_config,
             max_iterations=form.max_iterations,
             max_rl_iterations=form.max_rl_iterations,
-            env_path=form.env_path,
-            objective=form.objective,
-            ppo_config=build_ppo_config(
-                run_rl_training=form.run_rl,
-                num_envs=form.ppo_kwargs.get("num_envs"),
-                max_iterations=form.ppo_kwargs.get("max_iterations"),
-                timeout_seconds=form.ppo_kwargs.get("timeout_seconds"),
-                headless=form.ppo_kwargs.get("headless", True),
-                hooks=RunHooks(
-                    ppo_progress_callback=show_ppo_progress if form.run_rl else None,
-                    pre_training_callback=pre_cb,
-                    post_training_callback=post_cb,
-                ),
-            ),
-            run_dir=tmp_run_dir,
+            run_dir=str(tmp_run_dir),
             agent_reasoning=form.agent_reasoning,
-            status_callback=_update_status,
             initial_plan=planned_state.plan,
+            recorder=recorder,
         )
+
+        accumulated_state = dict(initial_state)
+        for event in compiled.stream(initial_state, stream_mode="updates"):
+            node_name = list(event.keys())[0]
+            node_updates = event[node_name]
+            if node_name != "__end__":
+                status_placeholder.info(f"Running: **{node_name}**")
+            if isinstance(node_updates, dict):
+                accumulated_state.update(node_updates)
+
         status_placeholder.empty()
+        state = _state_dict_to_run_state(accumulated_state, task_brief=task_brief)
         final_run_dir = form.output_dir / run_dir_name(state)
         state.recorder.move_to(final_run_dir)
         run_dir = final_run_dir
@@ -159,6 +171,21 @@ def _continue_pending_plan(st, pending: dict, *, base_url: str) -> None:
         return
 
     _render_result(st, state=state, run_dir=run_dir, run_rl=form.run_rl)
+
+
+def _state_dict_to_run_state(state: dict, *, task_brief: TaskBrief) -> RunState:
+    run_state = RunState(
+        task_brief=task_brief,
+        status=RunStatus(state["status"]),
+        iterations=state.get("iterations", []),
+        plan=state.get("plan"),
+        final_code=state.get("final_code"),
+        final_report=state.get("final_report"),
+        final_ppo_report=state.get("final_ppo_report"),
+        rl_training_skipped=not state["ppo_config"].run_rl_training,
+    )
+    run_state.recorder = state.get("recorder")
+    return run_state
 
 
 def _reject_pending_plan(st, pending: dict) -> None:

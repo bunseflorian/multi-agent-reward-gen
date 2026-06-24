@@ -6,7 +6,6 @@ import logging
 import os
 import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -53,9 +52,10 @@ def start_server(launcher: Path, pid_file: Path, base_url: str, timeout: int = 3
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info("Starting vLLM server via %s", launcher)
+    command = _build_launcher_command(launcher, pid_file)
     with log_file.open("ab") as lf:
         subprocess.Popen(
-            [sys.executable, str(launcher), "--pid-file", str(pid_file)],
+            command,
             stdout=lf,
             stderr=subprocess.STDOUT,
             start_new_session=True,
@@ -67,6 +67,16 @@ def start_server(launcher: Path, pid_file: Path, base_url: str, timeout: int = 3
 
     logger.warning("Server did not become ready within %ss.", timeout)
     return False
+
+
+def _build_launcher_command(launcher: Path, pid_file: Path) -> list[str]:
+    try:
+        from ..configs import config_get
+        conda_env = config_get("server.conda_env")
+    except (ValueError, KeyError):
+        conda_env = None
+    python_cmd = ["conda", "run", "--no-capture-output", "-n", conda_env, "python"] if conda_env else ["python"]
+    return [*python_cmd, str(launcher), "--pid-file", str(pid_file)]
 
 
 def _read_pid(pid_file: Path) -> int | None:

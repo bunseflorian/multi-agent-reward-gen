@@ -93,7 +93,6 @@ class RunHooks:
     pausing the local Qwen server before PPO.
     """
 
-    status_callback: Callable[[str], None] | None = field(default=None, compare=False, repr=False)
     ppo_progress_callback: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False, repr=False)
     pre_training_callback: Callable[[], None] | None = field(default=None, compare=False, repr=False)
     post_training_callback: Callable[[], None] | None = field(default=None, compare=False, repr=False)

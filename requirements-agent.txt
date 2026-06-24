@@ -1,0 +1,19 @@
+# Requirements for the 'multi_agent_framework' conda environment.
+# Runs the LangGraph orchestrator, agent pipeline, and Streamlit UI.
+# PPO training is delegated to the 'isaaclab' env via subprocess (conda run -n isaaclab).
+#
+#   conda create -n multi_agent_framework python=3.11 -y
+#   conda activate multi_agent_framework
+#   pip install -r source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/requirements-agent.txt
+#
+# Launch UI:
+#   streamlit run source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/ui/app.py
+
+langgraph==0.3.34
+# langsmith (transitive via langgraph) pulls websockets>=15; pin back to avoid conflicts.
+websockets==12.0
+streamlit>=1.54.0
+altair>=6.0.0
+pandas>=2.3.0
+PyYAML>=6.0.2
+tensorboard>=2.14.0
