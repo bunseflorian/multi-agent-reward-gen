@@ -63,6 +63,8 @@ def run_ppo_validation(
     summary["rl_games_root"] = str(rl_games_root)
     summary["candidate_reward_sha256"] = hashlib.sha256(reward_code.encode("utf-8")).hexdigest()
 
+    _save_policy_artifacts(run_path, summary.get("experiment_dir"), candidate_path)
+
     summary_path = run_path / "ppo_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -218,3 +220,16 @@ def _read_tail(path: Path, max_chars: int = 6000) -> str:
     except FileNotFoundError:
         return ""
     return text[-max_chars:]
+
+
+def _save_policy_artifacts(
+    run_path: Path,
+    experiment_dir: str | None,
+    candidate_env_path: Path,
+) -> None:
+    """Copy policy checkpoints and the candidate env into the run directory."""
+    if experiment_dir is not None:
+        nn_src = Path(experiment_dir) / "nn"
+        if nn_src.is_dir():
+            shutil.copytree(nn_src, run_path / "policy", dirs_exist_ok=True)
+    shutil.copy2(candidate_env_path, run_path / "env.py")

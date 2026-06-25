@@ -62,7 +62,7 @@ def _call(
         enable_thinking=enable_thinking,
     )
     artifact, logged = parser(raw)
-    logger.write(logged, agent=agent, kind="output")
+    logger.write(logged, agent=agent, kind="output", raw=raw)
     return artifact
 
 
@@ -260,4 +260,4 @@ def critic(
             metadata={"agent": "critic", "source": "ppo_training"},
         ), result
 
-    return _call(client, CRITIC_SYSTEM_PROMPT, user, parse, agent="critic", enable_thinking=enable_thinking, logger=logger, max_tokens=2048)
+    return _call(client, CRITIC_SYSTEM_PROMPT, user, parse, agent="critic", enable_thinking=enable_thinking, logger=logger, max_tokens=4096)

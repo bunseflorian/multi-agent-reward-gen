@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 from ..configs import build_ppo_config, config_get
@@ -23,8 +24,9 @@ def run_generation(
 ) -> None:
     """Run the Planner and leave the generated plan pending for UI approval."""
 
-    tmp_run_dir = form.output_dir / f"_running_{form.env_path.stem}"
-    tmp_run_dir.mkdir(parents=True, exist_ok=True)
+    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tmp_run_dir = form.output_dir / f"_running_{form.env_path.stem}_{_ts}"
+    tmp_run_dir.mkdir(parents=True)
     status_placeholder = st.empty()
 
     try:
@@ -42,6 +44,7 @@ def run_generation(
         status_placeholder.empty()
     except Exception as exc:
         status_placeholder.empty()
+        _rename_on_error(tmp_run_dir, form.env_path.stem)
         st.error(str(exc))
         return
 
@@ -167,6 +170,7 @@ def _continue_pending_plan(st, pending: dict, *, base_url: str) -> None:
         st.session_state.pop("pending_plan_run", None)
     except Exception as exc:
         status_placeholder.empty()
+        _rename_on_error(tmp_run_dir, form.env_path.stem)
         st.error(str(exc))
         return
 
@@ -200,6 +204,17 @@ def _reject_pending_plan(st, pending: dict) -> None:
 
     st.session_state.pop("pending_plan_run", None)
     st.info(f"Plan rejected. Run saved to `{final_run_dir}`.")
+
+
+def _rename_on_error(tmp_dir: Path, task_stem: str) -> None:
+    if not tmp_dir.exists():
+        return
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    failed_dir = tmp_dir.parent / f"{ts}_{task_stem}_error"
+    try:
+        tmp_dir.rename(failed_dir)
+    except Exception:
+        pass
 
 
 def _build_ppo_config(form: TaskFormValues, *, hooks: RunHooks) -> PPOConfig:

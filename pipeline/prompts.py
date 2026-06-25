@@ -62,6 +62,15 @@ Signal contract:
   example a distance, progress ratio, success flag, or violation amount. Write
   source tensors as `self.<path>` so Python can build the static-check tensor
   contract from this section.
+- CRITICAL: Only list signals that are actual instance attributes — i.e. assigned
+  as `self.X = ...` in `__init__`, `_setup_scene`, or `_compute_intermediate_values`
+  in the visible env code. Module-level functions (e.g. `_rotation_distance(...)`,
+  `compute_rewards(...)`) and JIT-compiled helpers are NOT instance attributes.
+  Never write `self._rotation_distance` or `self.<function_name>` for a
+  module-level function. If a value must be derived from such a function, list it
+  as `derived from:` with the explicit call, e.g.
+  `derived from: _rotation_distance(self.object_rot, self.goal_rot)`, and instruct
+  the Coder to call the function with explicit arguments in section 1 of the reward body.
 - Do not add multi-line explanations, examples, formulas, or reward-code hints
   in this section.
 - Do not call a signal dense unless it changes continuously with state changes.
@@ -178,11 +187,7 @@ Reward-term logging and metric stores (see Metrics section) come after the final
 recompute a signal for logging.
 
 ## Task scale sanity check
-- Use `Task scale hints` to sanity-check each reward component at representative values from the stated task range.
-- For each primary-objective term, mentally check whether the term changes meaningfully across small, typical, and large errors from the task scale hints.
-- For each constraint term, mentally check whether its magnitude stays clearly secondary to the primary-objective term over the same range.
-- If a term is nearly constant, saturates too early, vanishes over most of the task range, or dominates other terms, rescale it or choose a better term form.
-- Do not print this sanity check; use it only to choose the reward form and weights.
+- Use `Task scale hints` to verify each term stays action-informative across the task range and constraint terms don't dominate the primary-objective term.
 
 ## Tensor ops
 - Use dim=-1 for vector norms. Do not use keepdim=True. Do not reduce across envs.
@@ -288,7 +293,7 @@ Available forms (`error >= 0` / `magnitude >= 0`, `scale > 0`):
   for a progress/completion signal must increase as that signal improves; a
   distance/error signal must not be positively rewarded directly unless it is
   converted into a bonus that peaks near zero error.
-- Primary-objective components must be treated as bonus terms, not penalty terms. Every primary-objective component must therefore come from a bonus form (Forms 1–3, or Form 7 for success) and must enter the final `reward = ...` line with a `+` sign. Penalty forms (Forms 4–6, explicitly marked "subtract in final combination") are reserved for constraint components and must never be used to encode the primary objective — even if the resulting penalty would "approach 0" when the task succeeds. A Planner diagnostic trend such as `mean_dist_to_target: should approach 0` is not a license to build a distance penalty; the primary-objective dense term must remain a bonus that peaks at error ≈ 0.
+- Primary-objective components must use a bonus form (Forms 1–3 or 7, `+` sign). Penalty forms (Forms 4–6) are for constraints only. A diagnostic trend such as `mean_dist_to_target: should approach 0` is not a license to build a distance penalty — use a bonus that peaks at error ≈ 0 instead.
 - The Planner `Primary objective` is what learning must prioritize: pick a bonus form that stays action-informative across the stated task error range and peaks near error ≈ 0.
 - If the Signal contract includes an env-provided task-success flag (e.g. `self._success`), add Form 7 as an explicit primary-objective completion bonus alongside the dense bonus form. The success bonus must use that flag directly; do not reinvent a thresholded-error substitute when the flag is provided.
 - If that success flag also terminates the episode as success, make the success
@@ -387,45 +392,36 @@ Request a revision only when the PPO metrics or runtime result show a clear prob
 - If the primary objective is on track and constraints are also acceptable, output ACCEPT and FIX: none.
 - Never request a REVISE whose only effect is to improve a constraint metric while the primary objective is not on track.
 
-When proposing fixes, use the same reward-form toolbox as the Coder. Every form has up to three explicit numeric parameters: `amplitude` (leading multiplier), `sharpness` (small unitless factor inside the form, typically in `[1, 5]`, not present in every form), and `scale` (divides the raw signal). `scale` must come from the Planner `Task scale hints` for that exact signal, or a conservative literal if none is given; never bake `scale` into `sharpness` or `amplitude`. Do not recommend self-normalizing terms such as `distance / (distance + eps)`.
+## Reward-term dominance check
 
-Available forms (`error >= 0` / `magnitude >= 0`, `scale > 0`):
+Before proposing any fix, inspect the PPO report for logged reward-term contributions (keys starting with `final_reward_term_`). These are episodic sums and reflect actual step-weighted signal magnitudes.
 
-1. Exponential decay bonus: `amplitude * torch.exp(-sharpness * error / scale)`
-   - Pros: smooth, bounded, strong peak at error ≈ 0, good fine shaping near the target.
-   - Cons: gradient vanishes quickly for large errors; near-zero over most of the range if `scale` is too small.
+1. Compute the dominance ratio: `largest_penalty_episodic_sum / largest_bonus_episodic_sum`.
+2. If this ratio exceeds 5, the penalty is dominating. The agent learns to minimize the penalty (e.g., hovering still to avoid an angular-velocity penalty) rather than pursuing the primary objective. This is reward hacking caused by an oversized penalty term — NOT by a weak bonus.
+3. When dominance is detected:
+   - The FIX **must reduce the constraint penalty amplitude** until the penalty is at most 1–2× the primary-objective bonus at typical task magnitudes.
+   - Do NOT increase both terms proportionally; that preserves the dominance ratio and does not fix the problem.
+   - Do NOT increase the penalty amplitude further. Increasing a dominating penalty makes reward hacking worse.
+4. Additional diagnostic — "quiet-agent" pattern: if the constraint diagnostic (e.g., `mean_ang_vel_norm`) decreases over training while the primary diagnostic (e.g., `mean_dist_to_target`) stays flat or worsens, the agent is minimizing the penalty by staying still rather than pursuing the goal. Confirm dominance ratio > 5 and apply rule 3.
+5. Bonus gradient check: if the primary-objective bonus form is exponential and the episodic bonus sum is tiny compared to what `amplitude` alone would suggest (e.g., dist_bonus episodic ≈ 0.01 × amplitude × episode_length), the bonus gradient has likely vanished across the task range. In this case also increase `scale` so the exponential covers the actual task error range visible in `mean_dist_to_target`.
 
-2. Rational falloff bonus: `amplitude / (1.0 + sharpness * error / scale)`
-   - Pros: smooth and bounded; preserves gradient further from the target than exponential decay.
-   - Cons: gentler peak at error ≈ 0; slower fine shaping near the goal.
+When proposing fixes, use the same reward-form toolbox as the Coder. Params: `amplitude`, `sharpness` (1–5, where applicable), `scale` (from Task scale hints; never bake into others). No self-normalizing terms (e.g. `distance / (distance + eps)`).
 
-3. Linear clamp bonus: `amplitude * torch.clamp(1.0 - error / scale, min=0.0)`  *(no `sharpness` parameter)*
-   - Pros: exact zero beyond `scale`, linear and predictable gradient inside `[0, scale]`.
-   - Cons: no signal beyond `scale`; no curvature near the target, so less fine shaping.
+Forms (`error/magnitude ≥ 0`, `scale > 0`):
+1. Exp bonus:    `amplitude * torch.exp(-sharpness * error / scale)`
+2. Rational:     `amplitude / (1.0 + sharpness * error / scale)`
+3. Linear clamp: `amplitude * torch.clamp(1.0 - error / scale, min=0.0)`  [no sharpness]
+4. Linear pen:   `amplitude * (magnitude / scale)`                          [subtract]
+5. Quad pen:     `amplitude * (magnitude / scale) ** 2`                     [subtract]
+6. Norm pen:     `amplitude * torch.norm(signal, dim=-1) / scale`           [subtract]
+7. Success:      `amplitude * is_success.float()`  [no sharpness; amplitude ≥ 50× largest dense bonus; if Planner objective is flag-derived, FIX must include this form — dense-only strengthening is insufficient]
 
-4. Linear penalty: `amplitude * (magnitude / scale)`  *(subtracted in combination)*
-   - Pros: always provides a gradient; simple regularizer.
-   - Cons: unbounded; can dominate bonus terms if `amplitude` or `1/scale` is too large.
-
-5. Quadratic penalty: `amplitude * (magnitude / scale) ** 2`  *(subtracted in combination)*
-   - Pros: weak near zero, stronger for large deviations; natural fit for soft bounds.
-   - Cons: grows fast; can over-penalize rare large values.
-
-6. Vector-norm penalty: `amplitude * torch.norm(signal, dim=-1) / scale`  *(subtracted in combination)*
-   - Pros: natural for multi-dim signals (velocities, angular rates, gravity projection).
-   - Cons: linear growth; may dominate bonus terms if not kept small.
-
-7. Success bonus: `amplitude * is_success.float()` where `is_success` is either an env-provided per-env task-success flag listed in the Signal contract (e.g. `self._success`) or, when no flag is provided, built from a thresholded error (`error < success_threshold`).
-   - Pros: direct completion incentive; when an env flag exists, matches the Planner's primary-objective metric exactly.
-   - Cons: sparse; must accompany a dense shaping term to be learnable.
-   - Amplitude: this term must be LARGE — at least 50x the largest dense-bonus `amplitude` — so the success bonus clearly outweighs every dense bonus and any constraint penalty at typical magnitudes. A FIX that only raises `amplitude` on the dense term without also raising the success-bonus amplitude to this range is insufficient when the Planner objective is flag-derived.
-
-Guidance for choosing a form:
-- Primary-objective components must be treated as bonus terms, not penalty terms. Any FIX for a primary-objective component must keep it in the bonus family (Forms 1–3, or Form 7 for success) and added with a `+` sign. Never recommend changing a primary-objective component to a penalty form (Forms 4–6), and never recommend strengthening a penalty term that is supposed to carry the primary objective — recommend replacing it with a bonus form instead. Penalty forms are reserved for constraint components.
-- The main objective term must outweigh and outperform constraint terms across the task range.
-- If the Planner primary-objective metric is a success-rate or final-success built from an env-provided success flag, any FIX for the primary objective must include Form 7 as a distinct success-bonus term using that flag directly. Strengthening only the dense shaping term is not sufficient in that case.
-- Do not recommend copying all forms at once. Recommend only the minimal reward-shaping changes needed for the observed PPO failure.
-- Every FIX that changes a form must state all three numeric parameters explicitly: `amplitude`, `sharpness`, and `scale` (omit `sharpness` only for the `clamp` and `success` forms).
+FIX rules:
+- Primary-objective FIX → bonus form only (Forms 1–3 or 7, `+` sign). Never switch to or strengthen a penalty form for the primary objective.
+- Constraint FIX when penalty dominates (ratio > 5) → reduce the penalty amplitude. Do not increase it. Do not increase the bonus to "match" a dominating penalty — fix the penalty first.
+- Constraint FIX when penalty is appropriately sized → penalty form only; never weaken the primary-objective term to compensate.
+- Bonus gradient FIX → increase `scale` so the bonus covers the actual task error range shown in the dense diagnostic. Do not only increase `amplitude` if `scale` is too small for the task range.
+- Recommend only the minimal changes needed. State all numeric params explicitly (omit sharpness for Forms 3 and 7).
 
 Output exactly this schema and nothing else:
 

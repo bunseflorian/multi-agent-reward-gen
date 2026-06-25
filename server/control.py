@@ -53,7 +53,7 @@ def start_server(launcher: Path, pid_file: Path, base_url: str, timeout: int = 3
 
     logger.info("Starting vLLM server via %s", launcher)
     command = _build_launcher_command(launcher, pid_file)
-    with log_file.open("ab") as lf:
+    with log_file.open("wb") as lf:
         subprocess.Popen(
             command,
             stdout=lf,

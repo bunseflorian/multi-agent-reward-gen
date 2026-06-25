@@ -23,16 +23,25 @@ class RunRecorder:
             new_dir.mkdir(parents=True, exist_ok=True)
         self._log_dir = new_dir
 
-    def write(self, content: str, *, agent: str, kind: str) -> None:
-        """Append one agent turn to conversation.md."""
+    def write(self, content: str, *, agent: str, kind: str, raw: str | None = None) -> None:
+        """Append one agent turn to conversation.md and conversation_full.md."""
         if self._log_dir is None:
             return
         self._log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         header = f"## {agent.title()} — {kind.title()}\n*{timestamp}*\n"
         block = f"{header}\n```\n{content.strip()}\n```\n\n---\n\n"
-        with (self._log_dir / "conversation.md").open("a", encoding="utf-8") as f:
-            f.write(block)
+
+        # conversation.md: parsed outputs only
+        if kind == "output":
+            with (self._log_dir / "conversation.md").open("a", encoding="utf-8") as f:
+                f.write(block)
+
+        # conversation_full.md: all inputs + raw LLM outputs
+        full_content = raw if (kind == "output" and raw is not None) else content
+        full_block = f"{header}\n```\n{full_content.strip()}\n```\n\n---\n\n"
+        with (self._log_dir / "conversation_full.md").open("a", encoding="utf-8") as f:
+            f.write(full_block)
 
 
 def null_logger() -> RunRecorder:
