@@ -175,3 +175,6 @@
 (APIServer pid=1015856) INFO:     127.0.0.1:40278 - "POST /v1/chat/completions HTTP/1.1" 200 OK
 (APIServer pid=1015856) INFO 06-25 12:58:20 [loggers.py:259] Engine 000: Avg prompt throughput: 120.1 tokens/s, Avg generation throughput: 23.1 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
 (APIServer pid=1015856) INFO 06-25 12:58:30 [loggers.py:259] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=1015856) INFO:     127.0.0.1:39476 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=1015856) INFO:     127.0.0.1:48018 - "GET /v1/models HTTP/1.1" 200 OK
+ERROR conda.cli.main_run:execute(127): `conda run python /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/launch_server.py --pid-file /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/.qwen_server.pid` failed. (See above for error)
