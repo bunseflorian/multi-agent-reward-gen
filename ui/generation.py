@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from ..configs import build_ppo_config, config_get, config_path
-from ..core import PPOConfig, RunHooks, RunState, RunStatus, TaskBrief
+from ..core import RunHooks, RunState, RunStatus, TaskBrief
 from ..llm import QwenClient, load_qwen_config
 from ..pipeline import RunRecorder, build_graph, build_initial_state, run_dir_name
 from ..pipeline.env_context import load_env_context
@@ -37,17 +39,21 @@ _STAGE_LABEL = {
 }
 
 
+@dataclass
+class _UiSlots:
+    code_box: Any
+    progress_box: Any
+    log_box: Any
+    tensorboard_box: Any
+    agent_panel: Any
+
+
 def _render_agent_panel(
     placeholder,
     log_entries: list[str],
     ppo_is_active: bool,
     result_status: str | None = None,
 ) -> None:
-    """Render a growing log of agent executions.
-
-    log_entries: completed node names in order (shown as ✅).
-    ppo_is_active: True while PPO is running (shown as ⏳ at the bottom).
-    """
     rows = []
     for name in log_entries:
         icon = _STAGE_ICON.get(name, "🤖")
@@ -66,87 +72,135 @@ def _render_agent_panel(
             f'</div>'
         )
 
-    if not rows:
-        body = '<div style="color:#888;font-size:0.85em;font-style:italic">Waiting for agents…</div>'
-    else:
-        body = "".join(rows)
+    body = "".join(rows) if rows else (
+        '<div style="color:#888;font-size:0.85em;font-style:italic">Waiting for agents…</div>'
+    )
 
     result_html = ""
     if result_status:
+        is_failure = result_status == "error" or result_status.startswith("failed")
+        icon = "❌" if is_failure else "✅"
         result_html = (
             '<hr style="margin:10px 0">'
-            f'<div style="font-size:0.85em"><b>Result:</b> <code>{result_status}</code></div>'
+            f'<div style="font-size:0.85em">{icon} <code>{result_status}</code></div>'
         )
 
-    html = (
+    placeholder.markdown(
         '<div style="padding:0.5rem 0.75rem;border-left:3px solid #555">'
         '<div style="font-weight:bold;margin-bottom:8px">🤖 Agent Progress</div>'
-        + body
-        + result_html
-        + "</div>"
+        + body + result_html + "</div>",
+        unsafe_allow_html=True,
     )
-    placeholder.markdown(html, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Public entry point
 # ---------------------------------------------------------------------------
 
-def run_generation(
+def run_generation(st, *, base_url: str, form: TaskFormValues) -> None:
+    """Run the full multi-agent pipeline and render the result."""
+    if form.build_dpo_pair and form.dpo_target_pairs > 1:
+        _collect_dpo_pairs(st, base_url=base_url, form=form)
+        return
+
+    col_main, col_agents = st.columns([3, 1])
+    slots = _UiSlots(
+        code_box=col_main.empty(),
+        progress_box=col_main.empty(),
+        log_box=col_main.empty(),
+        tensorboard_box=col_main.empty(),
+        agent_panel=col_agents.empty(),
+    )
+
+    pair = _run_single(st, base_url=base_url, form=form, slots=slots)
+
+    if form.build_dpo_pair:
+        if pair is not None:
+            _write_pair(pair)
+            st.success("DPO pair written (1 pair added).")
+        else:
+            st.info("DPO pair: no pair built (chosen or rejected missing).")
+
+
+# ---------------------------------------------------------------------------
+# DPO collection loop
+# ---------------------------------------------------------------------------
+
+def _collect_dpo_pairs(st, *, base_url: str, form: TaskFormValues) -> None:
+    progress_hdr = st.empty()
+    run_slot = st.empty()
+
+    pairs_collected = 0
+    run_idx = 0
+
+    while pairs_collected < form.dpo_target_pairs:
+        run_idx += 1
+        progress_hdr.info(
+            f"⏳ Run {run_idx} · {pairs_collected} / {form.dpo_target_pairs} pairs collected …"
+        )
+
+        # Each call to run_slot.container() replaces the previous run's UI.
+        ctx = run_slot.container()
+        col_main, col_agents = ctx.columns([3, 1])
+        slots = _UiSlots(
+            code_box=col_main.empty(),
+            progress_box=col_main.empty(),
+            log_box=col_main.empty(),
+            tensorboard_box=col_main.empty(),
+            agent_panel=col_agents.empty(),
+        )
+
+        pair = _run_single(ctx, base_url=base_url, form=form, slots=slots)
+        if pair is not None:
+            _write_pair(pair)
+            pairs_collected += 1
+
+    progress_hdr.success(
+        f"✅ {pairs_collected} / {form.dpo_target_pairs} pairs collected · {run_idx} runs"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Single pipeline run
+# ---------------------------------------------------------------------------
+
+def _run_single(
     st,
     *,
     base_url: str,
     form: TaskFormValues,
-) -> None:
-    """Run the full multi-agent pipeline and render the result."""
-
+    slots: _UiSlots,
+) -> dict | None:
+    """Run the pipeline once. Returns a DPO pair dict if one can be built, else None."""
     _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     tmp_run_dir = form.output_dir / f"_running_{form.env_path.stem}_{_ts}"
     tmp_run_dir.mkdir(parents=True)
 
-    # Two-column layout: main content left, agent panel right.
-    col_main, col_agents = st.columns([3, 1])
-
-    with col_main:
-        code_box = st.empty()
-        progress_box = st.empty()
-        log_box = st.empty()
-        tensorboard_box = st.empty()
-
-    with col_agents:
-        agent_panel = st.empty()
-
-    # Agent tracking state (mutated by closures below).
-    # log_entries grows as each agent completes; ppo_state tracks PPO separately.
     log_entries: list[str] = []
-    ppo_state = {"active": False}  # dict allows mutation from nested closures
+    ppo_state = {"active": False}
 
     def _advance_to(node_name: str) -> None:
-        """Append node_name to the log after it completes."""
         if node_name in ("__end__", "finalizer"):
             return
-        # When RL is enabled, tester runs PPO internally — PPO handles its own log entry.
         if node_name == "tester" and form.run_rl:
             return
         log_entries.append(node_name)
-        _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
+        _render_agent_panel(slots.agent_panel, log_entries, ppo_state["active"])
 
     ppo_event_log: list[str] = []
 
     def show_ppo_progress(event: dict) -> None:
         status = event.get("status", "running")
-        # Update PPO entry in the agent panel.
         if status in ("running", "server_stopping", "server_stopped", "server_starting", "server_ready"):
             if not ppo_state["active"] and "ppo" not in log_entries:
                 ppo_state["active"] = True
-                _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
+                _render_agent_panel(slots.agent_panel, log_entries, ppo_state["active"])
         elif status in ("completed", "timeout"):
             if ppo_state["active"]:
                 ppo_state["active"] = False
                 log_entries.append("ppo")
-            _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
+            _render_agent_panel(slots.agent_panel, log_entries, ppo_state["active"])
 
-        # Update PPO log in main column.
         label = str(event.get("message")) if event.get("message") else f"PPO {status}"
         elapsed = event.get("elapsed_seconds")
         if elapsed is not None:
@@ -155,16 +209,14 @@ def run_generation(
         if log_path:
             label += f" | {log_path}"
         ppo_event_log.append(label)
-        progress_box.info(label)
+        slots.progress_box.info(label)
         tail = event.get("tail") or ""
-        log_box.code(tail if tail else "\n".join(ppo_event_log[-20:]), language="text")
-        with tensorboard_box.container():
-            render_tensorboard_metrics(st, tmp_run_dir, live_event=event)
+        slots.log_box.code(tail if tail else "\n".join(ppo_event_log[-20:]), language="text")
+        render_tensorboard_metrics(slots.tensorboard_box.container(), tmp_run_dir, live_event=event)
 
     pre_cb, post_cb = _server_ppo_hooks(base_url, show_ppo_progress) if form.run_rl else (None, None)
 
-    # Initial panel render: empty log, waiting state.
-    _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
+    _render_agent_panel(slots.agent_panel, log_entries, ppo_state["active"])
 
     try:
         client = QwenClient(load_qwen_config())
@@ -218,11 +270,10 @@ def run_generation(
                 accumulated_state.update(node_updates)
                 code = accumulated_state.get("code")
                 if code is not None:
-                    code_box.code(code.code, language="python")
+                    slots.code_box.code(code.code, language="python")
 
         state = _state_dict_to_run_state(accumulated_state, task_brief=task_brief)
 
-        # If PPO never completed (edge case), finalize it.
         if ppo_state["active"]:
             ppo_state["active"] = False
             log_entries.append("ppo")
@@ -230,34 +281,34 @@ def run_generation(
         final_run_dir = form.output_dir / run_dir_name(state)
         state.recorder.move_to(final_run_dir)
 
-        if form.build_dpo_pair:
-            from ..dpo.builder import build_pair
-            from ..dpo.storage import append_pair
-            pair = build_pair(state)
-            if pair is not None:
-                dpo_path = Path(__file__).parent.parent / "dpo" / "dpo_dataset.jsonl"
-                append_pair(pair, dpo_path)
-                st.success("DPO pair written (1 pair added).")
-            else:
-                st.info("DPO pair: no pair built (chosen or rejected missing).")
+        _render_agent_panel(slots.agent_panel, log_entries, False, result_status=state.status.value)
+        _render_result(st, state=state, run_dir=final_run_dir, run_rl=form.run_rl)
 
-        run_dir = final_run_dir
+        if not form.build_dpo_pair:
+            return None
+
+        from ..dpo.builder import build_pair
+        return build_pair(state)
+
     except Exception as exc:
         if ppo_state["active"]:
             ppo_state["active"] = False
             log_entries.append("ppo")
-        _render_agent_panel(agent_panel, log_entries, False, result_status="error")
+        _render_agent_panel(slots.agent_panel, log_entries, False, result_status="error")
         _rename_on_error(tmp_run_dir, form.env_path.stem)
         st.error(str(exc))
-        return
-
-    _render_agent_panel(agent_panel, log_entries, False, result_status=state.status.value)
-    _render_result(st, state=state, run_dir=run_dir, run_rl=form.run_rl)
+        return None
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _write_pair(pair: dict) -> None:
+    from ..dpo.storage import append_pair
+    dpo_path = Path(__file__).parent.parent / "dpo" / "dpo_dataset.jsonl"
+    append_pair(pair, dpo_path)
+
 
 def _state_dict_to_run_state(state: dict, *, task_brief: TaskBrief) -> RunState:
     run_state = RunState(
@@ -324,7 +375,6 @@ def _write_error_lines(st, errors: list[str]) -> None:
 
 
 def _server_ppo_hooks(base_url: str, progress: callable) -> tuple[callable | None, callable | None]:
-    """Return (pre_training, post_training) callbacks if the server is managed locally."""
     launcher_str = config_get("server.launcher")
     pid_file_str = config_get("server.pid_file")
     timeout = int(config_get("server.startup_timeout_seconds", 300))
