@@ -19,8 +19,6 @@ from .tensorboard_view import render_tensorboard_metrics
 # Agent panel constants
 # ---------------------------------------------------------------------------
 
-_PIPELINE_STAGES = ["planner", "coder", "reviewer", "tester", "ppo", "critic"]
-
 _STAGE_ICON = {
     "planner": "🗺️",
     "coder": "💻",
@@ -41,32 +39,37 @@ _STAGE_LABEL = {
 
 def _render_agent_panel(
     placeholder,
-    active: set[str],
-    done: set[str],
-    show_ppo: bool,
+    log_entries: list[str],
+    ppo_is_active: bool,
     result_status: str | None = None,
 ) -> None:
-    stages = [s for s in _PIPELINE_STAGES if show_ppo or s != "ppo"]
+    """Render a growing log of agent executions.
+
+    log_entries: completed node names in order (shown as ✅).
+    ppo_is_active: True while PPO is running (shown as ⏳ at the bottom).
+    """
     rows = []
-    for stage in stages:
-        if stage in active:
-            ind = "⏳"
-            weight = "bold"
-        elif stage in done:
-            ind = "✅"
-            weight = "normal"
-        else:
-            ind = "⬜"
-            weight = "normal"
-        icon = _STAGE_ICON[stage]
-        label = _STAGE_LABEL[stage]
+    for name in log_entries:
+        icon = _STAGE_ICON.get(name, "🤖")
+        label = _STAGE_LABEL.get(name, name.capitalize())
         rows.append(
-            f'<div style="display:flex;align-items:center;gap:6px;margin:5px 0">'
-            f'<span>{ind}</span>'
-            f'<span>{icon}</span>'
-            f'<span style="font-weight:{weight}">{label}</span>'
+            f'<div style="display:flex;align-items:center;gap:6px;margin:4px 0">'
+            f'<span>✅</span><span>{icon}</span><span>{label}</span>'
             f'</div>'
         )
+
+    if ppo_is_active:
+        rows.append(
+            f'<div style="display:flex;align-items:center;gap:6px;margin:4px 0">'
+            f'<span>⏳</span><span>🏋️</span>'
+            f'<span style="font-weight:bold">PPO Training</span>'
+            f'</div>'
+        )
+
+    if not rows:
+        body = '<div style="color:#888;font-size:0.85em;font-style:italic">Waiting for agents…</div>'
+    else:
+        body = "".join(rows)
 
     result_html = ""
     if result_status:
@@ -78,7 +81,7 @@ def _render_agent_panel(
     html = (
         '<div style="padding:0.5rem 0.75rem;border-left:3px solid #555">'
         '<div style="font-weight:bold;margin-bottom:8px">🤖 Agent Progress</div>'
-        + "".join(rows)
+        + body
         + result_html
         + "</div>"
     )
@@ -114,18 +117,19 @@ def run_generation(
         agent_panel = st.empty()
 
     # Agent tracking state (mutated by closures below).
-    active_nodes: set[str] = set()
-    done_nodes: set[str] = set()
+    # log_entries grows as each agent completes; ppo_state tracks PPO separately.
+    log_entries: list[str] = []
+    ppo_state = {"active": False}  # dict allows mutation from nested closures
 
     def _advance_to(node_name: str) -> None:
-        """Mark previous active non-PPO nodes as done; activate node_name."""
-        for n in list(active_nodes):
-            if n != "ppo":
-                done_nodes.add(n)
-                active_nodes.discard(n)
-        if node_name not in ("__end__", "finalizer"):
-            active_nodes.add(node_name)
-        _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl)
+        """Append node_name to the log after it completes."""
+        if node_name in ("__end__", "finalizer"):
+            return
+        # When RL is enabled, tester runs PPO internally — PPO handles its own log entry.
+        if node_name == "tester" and form.run_rl:
+            return
+        log_entries.append(node_name)
+        _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
 
     ppo_event_log: list[str] = []
 
@@ -133,11 +137,14 @@ def run_generation(
         status = event.get("status", "running")
         # Update PPO entry in the agent panel.
         if status in ("running", "server_stopping", "server_stopped", "server_starting", "server_ready"):
-            active_nodes.add("ppo")
+            if not ppo_state["active"] and "ppo" not in log_entries:
+                ppo_state["active"] = True
+                _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
         elif status in ("completed", "timeout"):
-            active_nodes.discard("ppo")
-            done_nodes.add("ppo")
-        _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl)
+            if ppo_state["active"]:
+                ppo_state["active"] = False
+                log_entries.append("ppo")
+            _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
 
         # Update PPO log in main column.
         label = str(event.get("message")) if event.get("message") else f"PPO {status}"
@@ -156,8 +163,8 @@ def run_generation(
 
     pre_cb, post_cb = _server_ppo_hooks(base_url, show_ppo_progress) if form.run_rl else (None, None)
 
-    # Initial panel render (all pending).
-    _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl)
+    # Initial panel render: empty log, waiting state.
+    _render_agent_panel(agent_panel, log_entries, ppo_state["active"])
 
     try:
         client = QwenClient(load_qwen_config())
@@ -215,9 +222,10 @@ def run_generation(
 
         state = _state_dict_to_run_state(accumulated_state, task_brief=task_brief)
 
-        # Mark all remaining active nodes done.
-        done_nodes.update(active_nodes)
-        active_nodes.clear()
+        # If PPO never completed (edge case), finalize it.
+        if ppo_state["active"]:
+            ppo_state["active"] = False
+            log_entries.append("ppo")
 
         final_run_dir = form.output_dir / run_dir_name(state)
         state.recorder.move_to(final_run_dir)
@@ -235,14 +243,15 @@ def run_generation(
 
         run_dir = final_run_dir
     except Exception as exc:
-        done_nodes.update(active_nodes)
-        active_nodes.clear()
-        _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl, result_status="error")
+        if ppo_state["active"]:
+            ppo_state["active"] = False
+            log_entries.append("ppo")
+        _render_agent_panel(agent_panel, log_entries, False, result_status="error")
         _rename_on_error(tmp_run_dir, form.env_path.stem)
         st.error(str(exc))
         return
 
-    _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl, result_status=state.status.value)
+    _render_agent_panel(agent_panel, log_entries, False, result_status=state.status.value)
     _render_result(st, state=state, run_dir=run_dir, run_rl=form.run_rl)
 
 
