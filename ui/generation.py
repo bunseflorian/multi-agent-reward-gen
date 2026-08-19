@@ -15,6 +15,79 @@ from ..server import start_server, stop_server
 from .task_form import TaskFormValues
 from .tensorboard_view import render_tensorboard_metrics
 
+# ---------------------------------------------------------------------------
+# Agent panel constants
+# ---------------------------------------------------------------------------
+
+_PIPELINE_STAGES = ["planner", "coder", "reviewer", "tester", "ppo", "critic"]
+
+_STAGE_ICON = {
+    "planner": "🗺️",
+    "coder": "💻",
+    "reviewer": "🔍",
+    "tester": "🧪",
+    "ppo": "🏋️",
+    "critic": "🎯",
+}
+_STAGE_LABEL = {
+    "planner": "Planner",
+    "coder": "Coder",
+    "reviewer": "Reviewer",
+    "tester": "Tester",
+    "ppo": "PPO Training",
+    "critic": "Critic",
+}
+
+
+def _render_agent_panel(
+    placeholder,
+    active: set[str],
+    done: set[str],
+    show_ppo: bool,
+    result_status: str | None = None,
+) -> None:
+    stages = [s for s in _PIPELINE_STAGES if show_ppo or s != "ppo"]
+    rows = []
+    for stage in stages:
+        if stage in active:
+            ind = "⏳"
+            weight = "bold"
+        elif stage in done:
+            ind = "✅"
+            weight = "normal"
+        else:
+            ind = "⬜"
+            weight = "normal"
+        icon = _STAGE_ICON[stage]
+        label = _STAGE_LABEL[stage]
+        rows.append(
+            f'<div style="display:flex;align-items:center;gap:6px;margin:5px 0">'
+            f'<span>{ind}</span>'
+            f'<span>{icon}</span>'
+            f'<span style="font-weight:{weight}">{label}</span>'
+            f'</div>'
+        )
+
+    result_html = ""
+    if result_status:
+        result_html = (
+            '<hr style="margin:10px 0">'
+            f'<div style="font-size:0.85em"><b>Result:</b> <code>{result_status}</code></div>'
+        )
+
+    html = (
+        '<div style="padding:0.5rem 0.75rem;border-left:3px solid #555">'
+        '<div style="font-weight:bold;margin-bottom:8px">🤖 Agent Progress</div>'
+        + "".join(rows)
+        + result_html
+        + "</div>"
+    )
+    placeholder.markdown(html, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def run_generation(
     st,
@@ -28,13 +101,45 @@ def run_generation(
     tmp_run_dir = form.output_dir / f"_running_{form.env_path.stem}_{_ts}"
     tmp_run_dir.mkdir(parents=True)
 
-    progress_box = st.empty()
-    log_box = st.empty()
-    tensorboard_box = st.empty()
+    # Two-column layout: main content left, agent panel right.
+    col_main, col_agents = st.columns([3, 1])
+
+    with col_main:
+        code_box = st.empty()
+        progress_box = st.empty()
+        log_box = st.empty()
+        tensorboard_box = st.empty()
+
+    with col_agents:
+        agent_panel = st.empty()
+
+    # Agent tracking state (mutated by closures below).
+    active_nodes: set[str] = set()
+    done_nodes: set[str] = set()
+
+    def _advance_to(node_name: str) -> None:
+        """Mark previous active non-PPO nodes as done; activate node_name."""
+        for n in list(active_nodes):
+            if n != "ppo":
+                done_nodes.add(n)
+                active_nodes.discard(n)
+        if node_name not in ("__end__", "finalizer"):
+            active_nodes.add(node_name)
+        _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl)
+
     ppo_event_log: list[str] = []
 
     def show_ppo_progress(event: dict) -> None:
         status = event.get("status", "running")
+        # Update PPO entry in the agent panel.
+        if status in ("running", "server_stopping", "server_stopped", "server_starting", "server_ready"):
+            active_nodes.add("ppo")
+        elif status in ("completed", "timeout"):
+            active_nodes.discard("ppo")
+            done_nodes.add("ppo")
+        _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl)
+
+        # Update PPO log in main column.
         label = str(event.get("message")) if event.get("message") else f"PPO {status}"
         elapsed = event.get("elapsed_seconds")
         if elapsed is not None:
@@ -50,7 +155,9 @@ def run_generation(
             render_tensorboard_metrics(st, tmp_run_dir, live_event=event)
 
     pre_cb, post_cb = _server_ppo_hooks(base_url, show_ppo_progress) if form.run_rl else (None, None)
-    status_placeholder = st.empty()
+
+    # Initial panel render (all pending).
+    _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl)
 
     try:
         client = QwenClient(load_qwen_config())
@@ -99,15 +206,22 @@ def run_generation(
         for event in compiled.stream(initial_state, stream_mode="updates"):
             node_name = list(event.keys())[0]
             node_updates = event[node_name]
-            if node_name != "__end__":
-                status_placeholder.info(f"Running: **{node_name}**")
+            _advance_to(node_name)
             if isinstance(node_updates, dict):
                 accumulated_state.update(node_updates)
+                code = accumulated_state.get("code")
+                if code is not None:
+                    code_box.code(code.code, language="python")
 
-        status_placeholder.empty()
         state = _state_dict_to_run_state(accumulated_state, task_brief=task_brief)
+
+        # Mark all remaining active nodes done.
+        done_nodes.update(active_nodes)
+        active_nodes.clear()
+
         final_run_dir = form.output_dir / run_dir_name(state)
         state.recorder.move_to(final_run_dir)
+
         if form.build_dpo_pair:
             from ..dpo.builder import build_pair
             from ..dpo.storage import append_pair
@@ -118,15 +232,23 @@ def run_generation(
                 st.success("DPO pair written (1 pair added).")
             else:
                 st.info("DPO pair: no pair built (chosen or rejected missing).")
+
         run_dir = final_run_dir
     except Exception as exc:
-        status_placeholder.empty()
+        done_nodes.update(active_nodes)
+        active_nodes.clear()
+        _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl, result_status="error")
         _rename_on_error(tmp_run_dir, form.env_path.stem)
         st.error(str(exc))
         return
 
+    _render_agent_panel(agent_panel, active_nodes, done_nodes, form.run_rl, result_status=state.status.value)
     _render_result(st, state=state, run_dir=run_dir, run_rl=form.run_rl)
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _state_dict_to_run_state(state: dict, *, task_brief: TaskBrief) -> RunState:
     run_state = RunState(
@@ -162,7 +284,7 @@ def _is_server_ready(base_url: str, timeout: float = 2.0) -> bool:
         return False
 
 
-def _render_result(st, *, state, run_dir: Path, run_rl: bool) -> None:
+def _render_result(st, *, state: RunState, run_dir: Path, run_rl: bool) -> None:
     st.subheader("Result")
     st.write(f"Status: `{state.status.value}`")
     st.write(f"RL status: `{'skipped' if state.rl_training_skipped else 'enabled'}`")

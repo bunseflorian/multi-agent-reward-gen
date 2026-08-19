@@ -42,7 +42,8 @@ def main() -> None:
 
     form = render_task_form(st, env_files, PROJECT_ROOT)
 
-    if not st.button("Generate reward code", type="primary", use_container_width=True):
+    btn = st.empty()
+    if not btn.button("Generate reward code", type="primary", use_container_width=True):
         return
 
     if not form.env_path.is_file():
@@ -52,6 +53,7 @@ def main() -> None:
         st.error(f"LLM server is not reachable at {base_url}. Check the server URL in the sidebar.")
         return
 
+    btn.button("⏳ Generating…", disabled=True, use_container_width=True)
     run_generation(st, base_url=base_url, form=form)
 
 
