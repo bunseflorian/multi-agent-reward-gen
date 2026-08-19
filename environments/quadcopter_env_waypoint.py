@@ -58,12 +58,21 @@ class QuadcopterWaypointEnvCfg(DirectRLEnvCfg):
 
     ui_window_class_type = QuadcopterWaypointEnvWindow
 
-    # waypoint task
-    num_waypoints = 5
-    waypoint_reached_threshold = 0.20
-    waypoint_xy_range = 2.0
-    waypoint_z_min = 0.5
-    waypoint_z_max = 1.5
+    # randomizable task parameters
+    num_waypoints: int = 5
+    num_waypoints_bounds: tuple[int, int] = (3, 8)
+
+    waypoint_xy_range: float = 2.0
+    waypoint_xy_range_bounds: tuple[float, float] = (1.0, 3.0)
+
+    waypoint_z_min: float = 0.5
+    waypoint_z_min_bounds: tuple[float, float] = (0.3, 0.8)
+
+    waypoint_z_max: float = 1.5
+    waypoint_z_max_bounds: tuple[float, float] = (1.0, 2.5)
+
+    waypoint_reached_threshold: float = 0.3
+    waypoint_reached_threshold_bounds: tuple[float, float] = (0.15, 0.5)
 
     # simulation
     sim: SimulationCfg = SimulationCfg(

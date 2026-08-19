@@ -18,7 +18,7 @@ if str(_PACKAGE_ROOT) not in sys.path:
 
 from qwen_agentv2.configs import config_path  # noqa: E402
 from qwen_agentv2.server import qwen_server_is_ready  # noqa: E402
-from qwen_agentv2.ui.generation import render_pending_plan, run_generation  # noqa: E402
+from qwen_agentv2.ui.generation import run_generation  # noqa: E402
 from qwen_agentv2.ui.sidebar import render_sidebar  # noqa: E402
 from qwen_agentv2.ui.task_form import discover_env_files, render_task_form  # noqa: E402
 
@@ -41,9 +41,6 @@ def main() -> None:
         return
 
     form = render_task_form(st, env_files, PROJECT_ROOT)
-
-    if render_pending_plan(st, base_url=base_url):
-        return
 
     if not st.button("Generate reward code", type="primary", use_container_width=True):
         return

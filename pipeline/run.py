@@ -79,11 +79,19 @@ def run_task(
     agent_reasoning: dict[str, bool] | None = None,
     stop_after_plan: bool = False,
     initial_plan: PlanArtifact | None = None,
+    randomize_env: bool = False,
 ) -> RunState:
     """Run one configured reward-generation task end-to-end."""
 
     resolved_env = env_path or config_path("paths.default_env")
-    task_brief = _task_from_env_path(resolved_env, config_path("paths.qwen_agent_root"), objective=objective)
+
+    if randomize_env and run_dir:
+        from .env_randomizer import create_candidate_env
+        effective_env_path = create_candidate_env(Path(resolved_env), Path(run_dir))
+    else:
+        effective_env_path = resolved_env
+
+    task_brief = _task_from_env_path(effective_env_path, config_path("paths.qwen_agent_root"), objective=objective)
 
     recorder = RunRecorder(Path(run_dir)) if run_dir else RunRecorder(None)
     ppo_config = ppo_config or build_ppo_config()

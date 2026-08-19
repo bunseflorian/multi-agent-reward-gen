@@ -94,6 +94,30 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     thrust_to_weight = 1.9
     moment_scale = 0.01
 
+    # randomizable task parameters
+    target_xy_range: float = 2.0
+    target_xy_range_bounds: tuple[float, float] = (1.0, 3.0)
+
+    target_z_min: float = 0.5
+    target_z_min_bounds: tuple[float, float] = (0.3, 1.0)
+
+    target_z_max: float = 1.5
+    target_z_max_bounds: tuple[float, float] = (1.0, 2.5)
+
+    target_xy_vel_range: float = 1.0
+    target_xy_vel_range_bounds: tuple[float, float] = (0.5, 2.0)
+
+    target_z_vel_range: float = 0.5
+    target_z_vel_range_bounds: tuple[float, float] = (0.2, 1.0)
+
+    target_xy_boundary: float = 3.0
+    target_xy_boundary_bounds: tuple[float, float] = (2.0, 5.0)
+
+    success_dist: float = 0.3
+    success_dist_bounds: tuple[float, float] = (0.15, 0.5)
+
+    success_duration_ratio: float = 0.7
+    success_duration_ratio_bounds: tuple[float, float] = (0.5, 0.9)
 
 
 class QuadcopterEnv(DirectRLEnv):
@@ -112,8 +136,8 @@ class QuadcopterEnv(DirectRLEnv):
         self._desired_vel_w = torch.zeros(self.num_envs, 3, device=self.device)
 
         # Success tracking: cumulative steps within success_dist of the target.
-        self._success_dist = 0.2
-        self._success_steps_required = int(0.7 * self.max_episode_length)
+        self._success_dist = self.cfg.success_dist
+        self._success_steps_required = int(self.cfg.success_duration_ratio * self.max_episode_length)
         self._dist_to_target = torch.zeros(self.num_envs, device=self.device)
         self._close_step_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self._success = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -150,14 +174,14 @@ class QuadcopterEnv(DirectRLEnv):
         # Update moving target
         self._desired_pos_w += self._desired_vel_w * self.step_dt
         # Keep target within a box around each environment origin
-        min_xy = self._terrain.env_origins[:, :2] - 2.0
-        max_xy = self._terrain.env_origins[:, :2] + 2.0
+        min_xy = self._terrain.env_origins[:, :2] - self.cfg.target_xy_boundary
+        max_xy = self._terrain.env_origins[:, :2] + self.cfg.target_xy_boundary
         pos_xy = self._desired_pos_w[:, :2]
         vel_xy = self._desired_vel_w[:, :2]
         hit_xy = torch.logical_or(pos_xy < min_xy, pos_xy > max_xy)
         self._desired_vel_w[:, :2] = torch.where(hit_xy, -vel_xy, vel_xy)
         self._desired_pos_w[:, :2] = torch.clamp(pos_xy, min=min_xy, max=max_xy)
-        z_min, z_max = 0.5, 1.5
+        z_min, z_max = self.cfg.target_z_min, self.cfg.target_z_max
         pos_z = self._desired_pos_w[:, 2]
         vel_z = self._desired_vel_w[:, 2]
         hit_z = torch.logical_or(pos_z < z_min, pos_z > z_max)
@@ -220,11 +244,11 @@ class QuadcopterEnv(DirectRLEnv):
         self._actions[env_ids] = 0.0
         self._close_step_count[env_ids] = 0
         self._success[env_ids] = False
-        self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
+        self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-self.cfg.target_xy_range, self.cfg.target_xy_range)
         self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
-        self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(0.5, 1.5)
-        self._desired_vel_w[env_ids, :2] = torch.zeros_like(self._desired_vel_w[env_ids, :2]).uniform_(-0.6, 0.6)
-        self._desired_vel_w[env_ids, 2] = torch.zeros_like(self._desired_vel_w[env_ids, 2]).uniform_(-0.2, 0.2)
+        self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(self.cfg.target_z_min, self.cfg.target_z_max)
+        self._desired_vel_w[env_ids, :2] = torch.zeros_like(self._desired_vel_w[env_ids, :2]).uniform_(-self.cfg.target_xy_vel_range, self.cfg.target_xy_vel_range)
+        self._desired_vel_w[env_ids, 2] = torch.zeros_like(self._desired_vel_w[env_ids, 2]).uniform_(-self.cfg.target_z_vel_range, self.cfg.target_z_vel_range)
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]

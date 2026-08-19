@@ -94,6 +94,29 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     thrust_to_weight = 1.9
     moment_scale = 0.01
 
+    # randomizable task parameters
+    target_xy_range: float = 2.0
+    target_xy_range_bounds: tuple[float, float] = (1.0, 3.0)
+
+    target_z_min: float = 0.5
+    target_z_min_bounds: tuple[float, float] = (0.3, 0.8)
+
+    target_z_max: float = 1.5
+    target_z_max_bounds: tuple[float, float] = (1.2, 2.0)
+
+    success_dist: float = 0.2
+    success_dist_bounds: tuple[float, float] = (0.12, 0.35)
+
+    success_duration_ratio: float = 0.8
+    success_duration_ratio_bounds: tuple[float, float] = (0.5, 0.9)
+
+    crash_z_min: float = 0.1
+    crash_z_min_bounds: tuple[float, float] = (0.05, 0.2)
+
+    crash_z_max: float = 2.0
+    crash_z_max_bounds: tuple[float, float] = (1.5, 3.0)
+
+
 class QuadcopterEnv(DirectRLEnv):
     cfg: QuadcopterEnvCfg
 
@@ -108,8 +131,8 @@ class QuadcopterEnv(DirectRLEnv):
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
 
         # Success tracking: cumulative steps within success_dist of the target.
-        self._success_dist = 0.2
-        self._success_steps_required = int(0.8 * self.max_episode_length)
+        self._success_dist = self.cfg.success_dist
+        self._success_steps_required = int(self.cfg.success_duration_ratio * self.max_episode_length)
         self._dist_to_target = torch.zeros(self.num_envs, device=self.device)
         self._close_step_count = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self._success = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -177,7 +200,10 @@ class QuadcopterEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
+        died = torch.logical_or(
+            self._robot.data.root_pos_w[:, 2] < self.cfg.crash_z_min,
+            self._robot.data.root_pos_w[:, 2] > self.cfg.crash_z_max,
+        )
         terminated = torch.logical_or(died, self._success)
         return terminated, time_out
 
@@ -195,9 +221,13 @@ class QuadcopterEnv(DirectRLEnv):
         self._close_step_count[env_ids] = 0
         self._success[env_ids] = False
         # Sample new commands
-        self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
+        self._desired_pos_w[env_ids, :2] = torch.zeros_like(
+            self._desired_pos_w[env_ids, :2]
+        ).uniform_(-self.cfg.target_xy_range, self.cfg.target_xy_range)
         self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
-        self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(0.5, 1.5)
+        self._desired_pos_w[env_ids, 2] = torch.zeros_like(
+            self._desired_pos_w[env_ids, 2]
+        ).uniform_(self.cfg.target_z_min, self.cfg.target_z_max)
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]

@@ -20,6 +20,8 @@ class TaskFormValues:
     output_dir: Path
     agent_reasoning: dict[str, bool]
     ppo_kwargs: dict
+    build_dpo_pair: bool
+    randomize_env: bool
 
 
 def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormValues:
@@ -43,6 +45,8 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
         height=90,
     )
     run_rl = st.checkbox("Run RL training", value=config_get("ppo.run_rl_training"))
+    build_dpo_pair = st.checkbox("Build DPO pair", value=False)
+    randomize_env = st.checkbox("Randomize env parameters", value=False)
     max_iterations = st.slider(
         "Max reviewer retries" if run_rl else "Max iterations",
         min_value=1,
@@ -81,6 +85,8 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
         output_dir=output_dir,
         agent_reasoning=agent_reasoning,
         ppo_kwargs=ppo_kwargs,
+        build_dpo_pair=build_dpo_pair,
+        randomize_env=randomize_env,
     )
 
 
