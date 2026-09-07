@@ -1,99 +1,111 @@
-[2026-08-19 14:46:25] torch=2.10.0+cu128  cuda=True  devices=1
-[2026-08-19 14:46:25] Starting server: model=/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B  address=http://0.0.0.0:8000/v1
-[2026-08-19 14:46:25] vLLM pid=1139156 — waiting for /v1/models …
-(APIServer pid=1139156) INFO 08-19 14:46:28 [utils.py:299] 
-(APIServer pid=1139156) INFO 08-19 14:46:28 [utils.py:299]        █     █     █▄   ▄█
-(APIServer pid=1139156) INFO 08-19 14:46:28 [utils.py:299]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.19.0
-(APIServer pid=1139156) INFO 08-19 14:46:28 [utils.py:299]   █▄█▀ █     █     █     █  model   /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B
-(APIServer pid=1139156) INFO 08-19 14:46:28 [utils.py:299]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
-(APIServer pid=1139156) INFO 08-19 14:46:28 [utils.py:299] 
-(APIServer pid=1139156) INFO 08-19 14:46:28 [utils.py:233] non-default args: {'host': '0.0.0.0', 'model': '/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B', 'max_model_len': 11776, 'served_model_name': ['Qwen/Qwen3.5-4B'], 'reasoning_parser': 'qwen3', 'gpu_memory_utilization': 0.85, 'max_num_seqs': 1, 'reasoning_config': ReasoningConfig(reasoning_start_str='<think>', reasoning_end_str='</think>')}
-(APIServer pid=1139156) INFO 08-19 14:46:28 [model.py:549] Resolved architecture: Qwen3_5ForConditionalGeneration
-(APIServer pid=1139156) INFO 08-19 14:46:28 [model.py:1678] Using max model len 11776
-(APIServer pid=1139156) INFO 08-19 14:46:28 [config.py:281] Setting attention block size to 528 tokens to ensure that attention page size is >= mamba page size.
-(APIServer pid=1139156) INFO 08-19 14:46:28 [config.py:312] Padding mamba page size by 0.76% to ensure that mamba page size and attention page size are exactly equal.
-(APIServer pid=1139156) INFO 08-19 14:46:28 [vllm.py:790] Asynchronous scheduling is enabled.
-(EngineCore pid=1139302) INFO 08-19 14:46:34 [core.py:105] Initializing a V1 LLM engine (v0.19.0) with config: model='/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B', speculative_config=None, tokenizer='/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=11776, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='qwen3', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False), seed=0, served_model_name=Qwen/Qwen3.5-4B, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'splitting_ops': ['vllm::unified_attention', 'vllm::unified_attention_with_output', 'vllm::unified_mla_attention', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::gdn_attention_core', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::kda_attention', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_images_per_batch': 0, 'compile_sizes': [], 'compile_ranges_endpoints': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_AND_PIECEWISE: (2, 1)>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False}, 'max_cudagraph_capture_size': 2, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': True, 'static_all_moe_layers': []}
-(EngineCore pid=1139302) INFO 08-19 14:46:35 [parallel_state.py:1400] world_size=1 rank=0 local_rank=0 distributed_init_method=tcp://131.234.139.197:43345 backend=nccl
-(EngineCore pid=1139302) INFO 08-19 14:46:35 [parallel_state.py:1716] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank N/A, EPLB rank N/A
-(EngineCore pid=1139302) INFO 08-19 14:46:38 [gpu_model_runner.py:4735] Starting to load model /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B...
-(EngineCore pid=1139302) INFO 08-19 14:46:38 [cuda.py:390] Using backend AttentionBackendEnum.FLASH_ATTN for vit attention
-(EngineCore pid=1139302) INFO 08-19 14:46:38 [mm_encoder_attention.py:230] Using AttentionBackendEnum.FLASH_ATTN for MMEncoderAttention.
-(EngineCore pid=1139302) INFO 08-19 14:46:38 [gdn_linear_attn.py:147] Using Triton/FLA GDN prefill kernel
-(EngineCore pid=1139302) INFO 08-19 14:46:38 [cuda.py:334] Using FLASH_ATTN attention backend out of potential backends: ['FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION'].
-(EngineCore pid=1139302) INFO 08-19 14:46:38 [flash_attn.py:596] Using FlashAttention version 2
-(EngineCore pid=1139302) <frozen importlib._bootstrap_external>:1241: FutureWarning: The cuda.cudart module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.runtime module instead.
-(EngineCore pid=1139302) <frozen importlib._bootstrap_external>:1241: FutureWarning: The cuda.nvrtc module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.nvrtc module instead.
-(EngineCore pid=1139302) Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
-(EngineCore pid=1139302) Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:00<00:00,  2.59it/s]
-(EngineCore pid=1139302) Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:00<00:00,  2.87it/s]
-(EngineCore pid=1139302) Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:00<00:00,  2.82it/s]
-(EngineCore pid=1139302) 
-(EngineCore pid=1139302) INFO 08-19 14:46:39 [default_loader.py:384] Loading weights took 0.72 seconds
-(EngineCore pid=1139302) INFO 08-19 14:46:39 [gpu_model_runner.py:4820] Model loading took 8.58 GiB memory and 1.035870 seconds
-(EngineCore pid=1139302) INFO 08-19 14:46:39 [gpu_model_runner.py:5753] Encoder cache will be initialized with a budget of 16384 tokens, and profiled with 1 image items of the maximum feature size.
-(EngineCore pid=1139302) INFO 08-19 14:46:41 [backends.py:1051] Using cache directory: /home/florian/.cache/vllm/torch_compile_cache/60c4274c95/rank_0_0/backbone for vLLM's torch.compile
-(EngineCore pid=1139302) INFO 08-19 14:46:41 [backends.py:1111] Dynamo bytecode transform time: 0.67 s
-(EngineCore pid=1139302) INFO 08-19 14:46:45 [backends.py:285] Directly load the compiled graph(s) for compile range (1, 2048) from the cache, took 3.617 s
-(EngineCore pid=1139302) INFO 08-19 14:46:45 [decorators.py:303] Directly load AOT compilation from path /home/florian/.cache/vllm/torch_compile_cache/torch_aot_compile/378a4e4811047992cba691f6c03d4f4dcfef0cd936fef055f99096d6fd4a6b0f/rank_0_0/model
-(EngineCore pid=1139302) INFO 08-19 14:46:45 [monitor.py:48] torch.compile took 4.57 s in total
-(EngineCore pid=1139302) /home/florian/anaconda3/envs/vllm_server/lib/python3.11/site-packages/vllm/model_executor/layers/fla/ops/utils.py:113: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (16) < num_heads (32). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].
-(EngineCore pid=1139302)   return fn(*contiguous_args, **contiguous_kwargs)
-(EngineCore pid=1139302) INFO 08-19 14:46:45 [monitor.py:76] Initial profiling/warmup run took 0.24 s
-(EngineCore pid=1139302) INFO 08-19 14:46:45 [kv_cache_utils.py:829] Overriding num_gpu_blocks=0 with num_gpu_blocks_override=2
-(EngineCore pid=1139302) INFO 08-19 14:46:45 [gpu_model_runner.py:5876] Profiling CUDA graph memory: PIECEWISE=2 (largest=2), FULL=1 (largest=1)
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [gpu_model_runner.py:5955] Estimated CUDA graph memory: 0.03 GiB total
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [gpu_worker.py:436] Available KV cache memory: 0.94 GiB
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [gpu_worker.py:470] In v0.19, CUDA graph memory profiling will be enabled by default (VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1), which more accurately accounts for CUDA graph memory during KV cache allocation. To try it now, set VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1 and increase --gpu-memory-utilization from 0.8500 to 0.8519 to maintain the same effective KV cache size.
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [kv_cache_utils.py:1319] GPU KV cache size: 7,392 tokens
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [kv_cache_utils.py:1324] Maximum concurrency for 11,776 tokens per request: 2.23x
-(EngineCore pid=1139302) 2026-08-19 14:46:46,466 - INFO - autotuner.py:262 - flashinfer.jit: [Autotuner]: Autotuning process starts ...
-(EngineCore pid=1139302) 2026-08-19 14:46:46,473 - INFO - autotuner.py:268 - flashinfer.jit: [Autotuner]: Autotuning process ends
-(EngineCore pid=1139302) Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/2 [00:00<?, ?it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 2/2 [00:00<00:00, 46.51it/s]
-(EngineCore pid=1139302) Capturing CUDA graphs (decode, FULL):   0%|          | 0/1 [00:00<?, ?it/s]Capturing CUDA graphs (decode, FULL): 100%|██████████| 1/1 [00:00<00:00, 55.97it/s]
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [gpu_model_runner.py:6046] Graph capturing finished in 0 secs, took 0.02 GiB
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [gpu_worker.py:597] CUDA graph pool memory: 0.02 GiB (actual), 0.03 GiB (estimated), difference: 0.01 GiB (25.0%).
-(EngineCore pid=1139302) INFO 08-19 14:46:46 [core.py:283] init engine (profile, create kv cache, warmup model) took 7.17 seconds
-(EngineCore pid=1139302) INFO 08-19 14:46:47 [vllm.py:790] Asynchronous scheduling is enabled.
-(APIServer pid=1139156) INFO 08-19 14:46:47 [api_server.py:590] Supported tasks: ['generate']
-(APIServer pid=1139156) INFO 08-19 14:46:48 [hf.py:314] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.
-(APIServer pid=1139156) INFO 08-19 14:46:51 [base.py:231] Multi-modal warmup completed in 2.813s
-(APIServer pid=1139156) INFO 08-19 14:46:51 [api_server.py:594] Starting vLLM server on http://0.0.0.0:8000
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:37] Available routes are:
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /openapi.json, Methods: HEAD, GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /docs, Methods: HEAD, GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /docs/oauth2-redirect, Methods: HEAD, GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /redoc, Methods: HEAD, GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /tokenize, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /detokenize, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /load, Methods: GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /version, Methods: GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /health, Methods: GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /metrics, Methods: GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/models, Methods: GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /ping, Methods: GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /ping, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /invocations, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/chat/completions, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/chat/completions/batch, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/responses, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/responses/{response_id}, Methods: GET
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/responses/{response_id}/cancel, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/completions, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/messages, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/messages/count_tokens, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /inference/v1/generate, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /scale_elastic_ep, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /is_scaling_elastic_ep, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/chat/completions/render, Methods: POST
-(APIServer pid=1139156) INFO 08-19 14:46:51 [launcher.py:46] Route: /v1/completions/render, Methods: POST
-(APIServer pid=1139156) INFO:     Started server process [1139156]
-(APIServer pid=1139156) INFO:     Waiting for application startup.
-(APIServer pid=1139156) INFO:     Application startup complete.
-(APIServer pid=1139156) INFO:     127.0.0.1:41224 - "GET /v1/models HTTP/1.1" 200 OK
-[2026-08-19 14:46:51] Server ready at http://0.0.0.0:8000/v1  (model: Qwen/Qwen3.5-4B)
-(APIServer pid=1139156) INFO:     127.0.0.1:41234 - "GET /v1/models HTTP/1.1" 200 OK
-(APIServer pid=1139156) INFO:     127.0.0.1:41250 - "POST /v1/chat/completions HTTP/1.1" 200 OK
-(APIServer pid=1139156) INFO:     127.0.0.1:41262 - "POST /v1/chat/completions HTTP/1.1" 200 OK
-(APIServer pid=1139156) INFO:     127.0.0.1:35602 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+[2026-09-07 17:52:22] torch=2.10.0+cu128  cuda=True  devices=1
+[2026-09-07 17:52:22] Starting server: model=/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B  address=http://0.0.0.0:8000/v1
+[2026-09-07 17:52:22] vLLM pid=4058557 — waiting for /v1/models …
+(APIServer pid=4058557) INFO 09-07 17:52:24 [utils.py:299] 
+(APIServer pid=4058557) INFO 09-07 17:52:24 [utils.py:299]        █     █     █▄   ▄█
+(APIServer pid=4058557) INFO 09-07 17:52:24 [utils.py:299]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.19.0
+(APIServer pid=4058557) INFO 09-07 17:52:24 [utils.py:299]   █▄█▀ █     █     █     █  model   /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B
+(APIServer pid=4058557) INFO 09-07 17:52:24 [utils.py:299]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=4058557) INFO 09-07 17:52:24 [utils.py:299] 
+(APIServer pid=4058557) INFO 09-07 17:52:24 [utils.py:233] non-default args: {'host': '0.0.0.0', 'model': '/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B', 'max_model_len': 11776, 'served_model_name': ['Qwen/Qwen3.5-4B'], 'reasoning_parser': 'qwen3', 'gpu_memory_utilization': 0.85, 'max_num_seqs': 1, 'reasoning_config': ReasoningConfig(reasoning_start_str='<think>', reasoning_end_str='</think>')}
+(APIServer pid=4058557) INFO 09-07 17:52:24 [model.py:549] Resolved architecture: Qwen3_5ForConditionalGeneration
+(APIServer pid=4058557) INFO 09-07 17:52:24 [model.py:1678] Using max model len 11776
+(APIServer pid=4058557) INFO 09-07 17:52:25 [config.py:281] Setting attention block size to 528 tokens to ensure that attention page size is >= mamba page size.
+(APIServer pid=4058557) INFO 09-07 17:52:25 [config.py:312] Padding mamba page size by 0.76% to ensure that mamba page size and attention page size are exactly equal.
+(APIServer pid=4058557) INFO 09-07 17:52:25 [vllm.py:790] Asynchronous scheduling is enabled.
+(EngineCore pid=4058714) INFO 09-07 17:52:31 [core.py:105] Initializing a V1 LLM engine (v0.19.0) with config: model='/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B', speculative_config=None, tokenizer='/home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=11776, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='qwen3', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False), seed=0, served_model_name=Qwen/Qwen3.5-4B, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['none'], 'splitting_ops': ['vllm::unified_attention', 'vllm::unified_attention_with_output', 'vllm::unified_mla_attention', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::gdn_attention_core', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::kda_attention', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_images_per_batch': 0, 'compile_sizes': [], 'compile_ranges_endpoints': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_AND_PIECEWISE: (2, 1)>, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': False, 'fuse_act_quant': False, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False}, 'max_cudagraph_capture_size': 2, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': True, 'static_all_moe_layers': []}
+(EngineCore pid=4058714) INFO 09-07 17:52:32 [parallel_state.py:1400] world_size=1 rank=0 local_rank=0 distributed_init_method=tcp://131.234.139.197:51903 backend=nccl
+(EngineCore pid=4058714) INFO 09-07 17:52:32 [parallel_state.py:1716] rank 0 in world size 1 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, EP rank N/A, EPLB rank N/A
+(EngineCore pid=4058714) INFO 09-07 17:52:35 [gpu_model_runner.py:4735] Starting to load model /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/models/llm-qwen3.5-4B...
+(EngineCore pid=4058714) INFO 09-07 17:52:35 [cuda.py:390] Using backend AttentionBackendEnum.FLASH_ATTN for vit attention
+(EngineCore pid=4058714) INFO 09-07 17:52:35 [mm_encoder_attention.py:230] Using AttentionBackendEnum.FLASH_ATTN for MMEncoderAttention.
+(EngineCore pid=4058714) INFO 09-07 17:52:35 [gdn_linear_attn.py:147] Using Triton/FLA GDN prefill kernel
+(EngineCore pid=4058714) INFO 09-07 17:52:35 [cuda.py:334] Using FLASH_ATTN attention backend out of potential backends: ['FLASH_ATTN', 'FLASHINFER', 'TRITON_ATTN', 'FLEX_ATTENTION'].
+(EngineCore pid=4058714) INFO 09-07 17:52:35 [flash_attn.py:596] Using FlashAttention version 2
+(EngineCore pid=4058714) <frozen importlib._bootstrap_external>:1241: FutureWarning: The cuda.cudart module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.runtime module instead.
+(EngineCore pid=4058714) <frozen importlib._bootstrap_external>:1241: FutureWarning: The cuda.nvrtc module is deprecated and will be removed in a future release, please switch to use the cuda.bindings.nvrtc module instead.
+(EngineCore pid=4058714) Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+(EngineCore pid=4058714) Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:00<00:00,  2.47it/s]
+(EngineCore pid=4058714) Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:00<00:00,  2.72it/s]
+(EngineCore pid=4058714) Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:00<00:00,  2.68it/s]
+(EngineCore pid=4058714) 
+(EngineCore pid=4058714) INFO 09-07 17:52:36 [default_loader.py:384] Loading weights took 0.76 seconds
+(EngineCore pid=4058714) INFO 09-07 17:52:37 [gpu_model_runner.py:4820] Model loading took 8.58 GiB memory and 1.044803 seconds
+(EngineCore pid=4058714) INFO 09-07 17:52:37 [gpu_model_runner.py:5753] Encoder cache will be initialized with a budget of 16384 tokens, and profiled with 1 image items of the maximum feature size.
+(EngineCore pid=4058714) INFO 09-07 17:52:38 [backends.py:1051] Using cache directory: /home/florian/.cache/vllm/torch_compile_cache/60c4274c95/rank_0_0/backbone for vLLM's torch.compile
+(EngineCore pid=4058714) INFO 09-07 17:52:38 [backends.py:1111] Dynamo bytecode transform time: 0.69 s
+(EngineCore pid=4058714) INFO 09-07 17:52:42 [backends.py:285] Directly load the compiled graph(s) for compile range (1, 2048) from the cache, took 3.651 s
+(EngineCore pid=4058714) INFO 09-07 17:52:42 [decorators.py:303] Directly load AOT compilation from path /home/florian/.cache/vllm/torch_compile_cache/torch_aot_compile/378a4e4811047992cba691f6c03d4f4dcfef0cd936fef055f99096d6fd4a6b0f/rank_0_0/model
+(EngineCore pid=4058714) INFO 09-07 17:52:42 [monitor.py:48] torch.compile took 4.61 s in total
+(EngineCore pid=4058714) /home/florian/anaconda3/envs/vllm_server/lib/python3.11/site-packages/vllm/model_executor/layers/fla/ops/utils.py:113: UserWarning: Input tensor shape suggests potential format mismatch: seq_len (16) < num_heads (32). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].
+(EngineCore pid=4058714)   return fn(*contiguous_args, **contiguous_kwargs)
+(EngineCore pid=4058714) INFO 09-07 17:52:42 [monitor.py:76] Initial profiling/warmup run took 0.23 s
+(EngineCore pid=4058714) INFO 09-07 17:52:43 [kv_cache_utils.py:829] Overriding num_gpu_blocks=0 with num_gpu_blocks_override=2
+(EngineCore pid=4058714) INFO 09-07 17:52:43 [gpu_model_runner.py:5876] Profiling CUDA graph memory: PIECEWISE=2 (largest=2), FULL=1 (largest=1)
+(EngineCore pid=4058714) INFO 09-07 17:52:43 [gpu_model_runner.py:5955] Estimated CUDA graph memory: 0.03 GiB total
+(EngineCore pid=4058714) INFO 09-07 17:52:43 [gpu_worker.py:436] Available KV cache memory: 0.94 GiB
+(EngineCore pid=4058714) INFO 09-07 17:52:43 [gpu_worker.py:470] In v0.19, CUDA graph memory profiling will be enabled by default (VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1), which more accurately accounts for CUDA graph memory during KV cache allocation. To try it now, set VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS=1 and increase --gpu-memory-utilization from 0.8500 to 0.8519 to maintain the same effective KV cache size.
+(EngineCore pid=4058714) INFO 09-07 17:52:43 [kv_cache_utils.py:1319] GPU KV cache size: 7,392 tokens
+(EngineCore pid=4058714) INFO 09-07 17:52:43 [kv_cache_utils.py:1324] Maximum concurrency for 11,776 tokens per request: 2.23x
+(EngineCore pid=4058714) 2026-09-07 17:52:43,855 - INFO - autotuner.py:262 - flashinfer.jit: [Autotuner]: Autotuning process starts ...
+(EngineCore pid=4058714) 2026-09-07 17:52:43,861 - INFO - autotuner.py:268 - flashinfer.jit: [Autotuner]: Autotuning process ends
+(EngineCore pid=4058714) Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/2 [00:00<?, ?it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 2/2 [00:00<00:00, 51.60it/s]
+(EngineCore pid=4058714) Capturing CUDA graphs (decode, FULL):   0%|          | 0/1 [00:00<?, ?it/s]Capturing CUDA graphs (decode, FULL): 100%|██████████| 1/1 [00:00<00:00, 57.11it/s]
+(EngineCore pid=4058714) INFO 09-07 17:52:44 [gpu_model_runner.py:6046] Graph capturing finished in 0 secs, took 0.02 GiB
+(EngineCore pid=4058714) INFO 09-07 17:52:44 [gpu_worker.py:597] CUDA graph pool memory: 0.02 GiB (actual), 0.03 GiB (estimated), difference: 0.01 GiB (25.0%).
+(EngineCore pid=4058714) INFO 09-07 17:52:44 [core.py:283] init engine (profile, create kv cache, warmup model) took 7.17 seconds
+(EngineCore pid=4058714) INFO 09-07 17:52:44 [vllm.py:790] Asynchronous scheduling is enabled.
+(APIServer pid=4058557) INFO 09-07 17:52:44 [api_server.py:590] Supported tasks: ['generate']
+(APIServer pid=4058557) INFO 09-07 17:52:45 [hf.py:314] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.
+(APIServer pid=4058557) INFO 09-07 17:52:47 [base.py:231] Multi-modal warmup completed in 2.519s
+(APIServer pid=4058557) INFO 09-07 17:52:47 [api_server.py:594] Starting vLLM server on http://0.0.0.0:8000
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:37] Available routes are:
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /openapi.json, Methods: GET, HEAD
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /docs, Methods: GET, HEAD
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /docs/oauth2-redirect, Methods: GET, HEAD
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /redoc, Methods: GET, HEAD
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /tokenize, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /detokenize, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /load, Methods: GET
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /version, Methods: GET
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /health, Methods: GET
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /metrics, Methods: GET
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/models, Methods: GET
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /ping, Methods: GET
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /ping, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /invocations, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/chat/completions, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/chat/completions/batch, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/responses, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/responses/{response_id}, Methods: GET
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/responses/{response_id}/cancel, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/completions, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/messages, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/messages/count_tokens, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /inference/v1/generate, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /scale_elastic_ep, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /is_scaling_elastic_ep, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/chat/completions/render, Methods: POST
+(APIServer pid=4058557) INFO 09-07 17:52:47 [launcher.py:46] Route: /v1/completions/render, Methods: POST
+(APIServer pid=4058557) INFO:     Started server process [4058557]
+(APIServer pid=4058557) INFO:     Waiting for application startup.
+(APIServer pid=4058557) INFO:     Application startup complete.
+(APIServer pid=4058557) INFO:     127.0.0.1:56650 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-09-07 17:52:48] Server ready at http://0.0.0.0:8000/v1  (model: Qwen/Qwen3.5-4B)
+(APIServer pid=4058557) INFO:     127.0.0.1:56654 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO:     127.0.0.1:56658 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO 09-07 17:52:58 [loggers.py:259] Engine 000: Avg prompt throughput: 240.3 tokens/s, Avg generation throughput: 25.1 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=4058557) INFO:     127.0.0.1:54056 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO 09-07 17:53:08 [loggers.py:259] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=4058557) INFO:     127.0.0.1:47546 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO:     127.0.0.1:37412 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO:     127.0.0.1:39062 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO:     127.0.0.1:39072 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO:     127.0.0.1:39078 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO:     127.0.0.1:39084 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO 09-07 17:53:38 [loggers.py:259] Engine 000: Avg prompt throughput: 417.4 tokens/s, Avg generation throughput: 51.5 tokens/s, Running: 1 reqs, Waiting: 0 reqs, GPU KV cache usage: 21.1%, Prefix cache hit rate: 0.0%
+(APIServer pid=4058557) INFO:     127.0.0.1:39090 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO:     127.0.0.1:43236 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=4058557) INFO 09-07 17:53:48 [loggers.py:259] Engine 000: Avg prompt throughput: 404.3 tokens/s, Avg generation throughput: 73.8 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=4058557) INFO:     127.0.0.1:54348 - "POST /v1/chat/completions HTTP/1.1" 200 OK
 ERROR conda.cli.main_run:execute(127): `conda run python /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/launch_server.py --pid-file /home/florian/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/qwen_agentv2/qwen_vllm_server/.qwen_server.pid` failed. (See above for error)

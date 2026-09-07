@@ -182,9 +182,10 @@ Structure the reward body in three ordered sections, with no other reward arithm
 2. Transform each raw signal into a named reward-component local variable, one component per assignment. All numeric parameters of the chosen reward form (amplitude, sharpness, scale) are written as numeric literals directly inside this assignment.
 3. Combine all components in a single final assignment of the form `reward = component1 - component2 + component3 + ...`. Use `+` for bonus components and `-` for penalty components. No numeric weights appear in this line — the per-component amplitude was already baked into section 2. Do not accumulate into `reward` with `+=` and do not split the combination across multiple statements.
 
-Reward-term logging and metric stores (see Metrics section) come after the final
-`reward = ...` line and reuse the named locals from sections 1–2; never
-recompute a signal for logging.
+Reward-term logging is not your responsibility (see Metrics section). Metric
+stores for Planner-defined metrics may come after the final `reward = ...`
+line and must reuse the named locals from sections 1–2; never recompute a
+signal for logging.
 
 ## Task scale sanity check
 - Use `Task scale hints` to verify each term stays action-informative across the task range and constraint terms don't dominate the primary-objective term.
@@ -198,22 +199,13 @@ recompute a signal for logging.
 Three stores exist: `self._episode_sums`, `self._episode_final_values`, `self._episode_max_values`. Never use any other logging attribute.
 It's important to use setdefault and += for mean metrics to avoid KeyErrors and preserve running sums across steps. Do not reset mean metrics inside the reward body with direct assignment; that will break the running sum.
 
-- After `reward = ...`, log every named reward component used in the final
-  reward expression to `self._episode_final_values`.
-- Reward-term keys must start with `final_reward_term_` and should map directly
-  to the local component variable name, e.g. `reward_dist` →
-  `"final_reward_term_reward_dist"`, `penalty_ang_vel` →
-  `"final_reward_term_penalty_ang_vel"`.
-- Reward-term sums are raw episodic return contributions. Although they use the
-  `final_` prefix for the existing reset logger, they must be accumulated with
-  `+=` over the episode and logged at reset as final episodic sums.
-- Use setdefault and += only:
-  ```python
-  self._episode_final_values.setdefault("final_reward_term_reward_dist", torch.zeros_like(reward_dist))
-  self._episode_final_values["final_reward_term_reward_dist"] += reward_dist
-  ```
-- Do not divide reward terms by episode length in the reward body. The reset
-  logger records these values as per-episode sums.
+- Reward-term logging is handled automatically outside your generated code: the
+  pipeline patcher accumulates every named component variable referenced in
+  your final `reward = ...` expression into `self._episode_final_values` under
+  `final_reward_term_<component_name>` for you.
+- Do not write any `self._episode_final_values` bookkeeping for reward
+  components yourself, and do not invent `final_reward_term_*` keys. Only
+  Planner-defined metrics (below) are your responsibility to log.
 
 - Metric store is derived from the metric name prefix: `mean_` → `_episode_sums`, `final_` → `_episode_final_values`, `max_` → `_episode_max_values`.
 - Metric names are exact contract keys. Use exactly the Planner metric names, with exactly one prefix from `{mean_, final_, max_}`.

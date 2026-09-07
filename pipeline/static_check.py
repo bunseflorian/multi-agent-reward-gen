@@ -93,7 +93,6 @@ def static_check(
     if tree is not None:
         _validate_ast(tree, errors, code)
         _check_reward_assignment(tree, errors)
-        _check_reward_term_logging(tree, errors)
         used_self_paths = sorted(_used_reward_self_paths(tree))
         if allowed_tensors is not None:
             _validate_self_attrs(used_self_paths, allowed_tensors, errors)
@@ -223,60 +222,6 @@ def _check_reward_assignment(tree: ast.Module, errors: list[str]) -> None:
         "Generated code does not assign to variable 'reward'. "
         "The final reward must be assigned as: reward = <expression>"
     )
-
-
-def _check_reward_term_logging(tree: ast.Module, errors: list[str]) -> None:
-    """Require every named reward component in ``reward = ...`` to be summed."""
-
-    component_names = _reward_component_names(tree)
-    if not component_names:
-        return
-    logged = _reward_term_logged_names(tree)
-    missing = sorted(name for name in component_names if name not in logged)
-    if missing:
-        expected = ", ".join(f"final_reward_term_{name}" for name in missing)
-        errors.append(
-            "Reward component logging is incomplete. Accumulate every named component from "
-            f"the final reward expression in self._episode_final_values; missing: {expected}."
-        )
-
-
-def _reward_component_names(tree: ast.Module) -> set[str]:
-    reward_assigns = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "reward" for target in node.targets)
-    ]
-    if not reward_assigns:
-        return set()
-    value = reward_assigns[-1].value
-    return {
-        node.id
-        for node in ast.walk(value)
-        if isinstance(node, ast.Name) and node.id not in {"reward", "torch"}
-    }
-
-
-def _reward_term_logged_names(tree: ast.Module) -> set[str]:
-    logged: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.AugAssign) or not isinstance(node.op, ast.Add):
-            continue
-        key = _reward_term_key(node.target)
-        if key is not None and key.startswith("final_reward_term_"):
-            logged.add(key.removeprefix("final_reward_term_"))
-    return logged
-
-
-def _reward_term_key(target: ast.AST) -> str | None:
-    if not isinstance(target, ast.Subscript):
-        return None
-    if _dotted_name(target.value) != "self._episode_final_values":
-        return None
-    key_node = target.slice
-    if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
-        return key_node.value
-    return None
 
 
 def _validate_self_attrs(used_paths: list[str], allowed_tensors: list[str], errors: list[str]) -> None:
