@@ -16,7 +16,7 @@ llm:
   # If the vLLM server runs on a separate machine, set this to http://<server-ip>:8000/v1
   # or override via env var: QWEN_BASE_URL=http://<server-ip>:8000/v1
   base_url: http://localhost:8000/v1
-  model: Qwen/Qwen3.5-4B
+  model: Qwen/Qwen3.5-9B-AWQ
   api_key: EMPTY
   timeout_seconds: 60.0
   max_tokens: 2048

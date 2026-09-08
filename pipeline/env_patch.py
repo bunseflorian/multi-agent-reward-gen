@@ -68,6 +68,10 @@ def patch_reward_body(source: str, reward_code: str) -> str:
             f"{indent}self._episode_final_values[{_reward_term_key(name)!r}] += {name}",
         )
     ]
+    logging_lines += [
+        f"{indent}self._episode_final_values.setdefault({_reward_term_key('total')!r}, torch.zeros_like(reward))",
+        f"{indent}self._episode_final_values[{_reward_term_key('total')!r}] += reward",
+    ]
 
     body = [
         f"{indent}if not hasattr(self, '_episode_sums'):",

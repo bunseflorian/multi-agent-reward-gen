@@ -142,6 +142,9 @@ def _build_vllm_command(s: ServerSettings) -> list[str]:
         "--max-model-len", str(s.max_model_len),
         "--gpu-memory-utilization", str(s.gpu_memory_utilization),
         "--max-num-seqs", str(s.max_num_seqs),
+        # This pipeline is text-only; skip the multimodal encoder cache reservation
+        # that Qwen3.5's vision tower would otherwise claim at startup.
+        "--limit-mm-per-prompt", '{"image": 0}',
     ]
 
 

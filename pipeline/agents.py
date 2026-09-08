@@ -18,9 +18,8 @@ from ..llm.parsers import (
     extract_review_feedback,
     parse_reward_code,
     require_code_block_terminator,
-    review_passed,
 )
-from .formatting import format_metric_history
+from .formatting import check_ppo_success_rate, format_metric_history
 from .logger import RunRecorder, null_logger
 from .prompts import (
     CODER_FEEDBACK_PROMPT,
@@ -195,7 +194,10 @@ def reviewer(
 
     def parse(raw: str) -> tuple[CodeReviewArtifact, str]:
         result = extract_final_answer(raw)
-        passed = review_passed(result) and static_report.passed
+        # The static checker is the sole source of truth for pass/fail; the LLM
+        # only narrates it (see REVIEWER_SYSTEM_PROMPT) and must never veto a
+        # static PASS or rubber-stamp a static FAIL.
+        passed = static_report.passed
         feedback = extract_review_feedback(result)
         return CodeReviewArtifact(
             passed=passed,
@@ -234,11 +236,24 @@ def critic(
     runtime_errors = "\n".join(f"- {e}" for e in unique[:8]) if unique else "- none"
 
     summary = ppo_report.summary if isinstance(ppo_report.summary, dict) else {}
+    raw_metric_history = summary.get("metric_history", [])
     critic_metric_history = summary.get("critic_metric_history")
     metric_history = (
         critic_metric_history
         if isinstance(critic_metric_history, str) and critic_metric_history.strip()
-        else format_metric_history(summary.get("metric_history", []))
+        else format_metric_history(raw_metric_history)
+    )
+
+    # Deterministic acceptance gate: like the Reviewer's static check, this is
+    # authoritative when it applies. It only abstains (None) when there is no
+    # recognized success-rate metric to judge (e.g. a PPO crash with no
+    # metric_history, or a dense-only objective without a success flag) --
+    # only then does the LLM's own DECISION line drive should_retry.
+    ppo_success = check_ppo_success_rate(raw_metric_history)
+    ppo_success_check = (
+        "PASSED (success rate over the last 5% of sampled episodes exceeds 95%)" if ppo_success is True
+        else "FAILED (success rate over the last 5% of sampled episodes is at or below 95%)" if ppo_success is False
+        else "N/A (no recognized success-rate metric in metric_history; judge from the metrics/traceback below)"
     )
 
     user = CRITIC_USER.format(
@@ -249,15 +264,20 @@ def critic(
         timed_out=ppo_report.timed_out,
         exit_code=ppo_report.exit_code,
         runtime_errors=runtime_errors,
+        ppo_success_check=ppo_success_check,
         metric_history=metric_history,
     )
 
     def parse(raw: str) -> tuple[CritiqueArtifact, str]:
         result = extract_final_answer(raw)
+        should_retry = (
+            not ppo_success if ppo_success is not None
+            else critic_requests_revision(result, ppo_report.passed)
+        )
         return CritiqueArtifact(
             feedback=result,
-            should_retry=critic_requests_revision(result, ppo_report.passed),
-            metadata={"agent": "critic", "source": "ppo_training"},
+            should_retry=should_retry,
+            metadata={"agent": "critic", "source": "ppo_training", "ppo_success_check": ppo_success},
         ), result
 
     return _call(client, CRITIC_SYSTEM_PROMPT, user, parse, agent="critic", enable_thinking=enable_thinking, logger=logger, max_tokens=4096)

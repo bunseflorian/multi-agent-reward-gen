@@ -93,6 +93,7 @@ def static_check(
     if tree is not None:
         _validate_ast(tree, errors, code)
         _check_reward_assignment(tree, errors)
+        _check_reward_combination_line(tree, errors, code)
         used_self_paths = sorted(_used_reward_self_paths(tree))
         if allowed_tensors is not None:
             _validate_self_attrs(used_self_paths, allowed_tensors, errors)
@@ -222,6 +223,48 @@ def _check_reward_assignment(tree: ast.Module, errors: list[str]) -> None:
         "Generated code does not assign to variable 'reward'. "
         "The final reward must be assigned as: reward = <expression>"
     )
+
+
+def _check_reward_combination_line(tree: ast.Module, errors: list[str], code: str) -> None:
+    """The final `reward = ...` line must combine bare component names only.
+
+    The patcher auto-logs `final_reward_term_<name>` for every ``Name`` node it
+    finds anywhere in this expression, using that name's raw bound value. If a
+    raw bool/int signal appears inline here (e.g. wrapped in `.float()` or
+    multiplied by a literal) instead of being pre-bound to its own component
+    variable, the patcher logs the raw value instead of the computed term --
+    which crashes PPO metric logging when the raw value is non-float. Reject
+    that pattern before it reaches PPO training.
+    """
+
+    reward_assigns = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "reward" for target in node.targets)
+    ]
+    if not reward_assigns:
+        return
+
+    value = reward_assigns[-1].value
+
+    def _leaves(node: ast.AST):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
+            yield from _leaves(node.left)
+            yield from _leaves(node.right)
+        else:
+            yield node
+
+    for leaf in _leaves(value):
+        if isinstance(leaf, ast.Name):
+            continue
+        snippet = ast.get_source_segment(code, leaf) or ast.dump(leaf)
+        errors.append(
+            "The final 'reward = ...' line may only combine bare component-variable "
+            f"names with +/-; found a non-name term: {snippet!r}. Pre-compute this as "
+            "its own component variable (already converted to float, with any weight "
+            "baked in) before the final combination line."
+        )
 
 
 def _validate_self_attrs(used_paths: list[str], allowed_tensors: list[str], errors: list[str]) -> None:
@@ -455,7 +498,14 @@ def _shape_specs_from_entries(entries: list[str] | None) -> dict[str, tuple[int,
 
 
 def _shape_from_entry(entry: str) -> tuple[int, ...] | None:
+    # Canonical form: `[shape: (N, 3)]`. Also accept the Planner dropping the
+    # `shape:` keyword or the parens, e.g. `[N, 3]` -- a missing shape spec
+    # silently falls back to a 1D mock shape (see _mock_value_for_path), which
+    # produces confusing, environment-inaccurate "shape mismatch" static-check
+    # errors for any signal the Planner declares as multi-dimensional.
     match = re.search(r"\[shape:\s*\(([^)]*)\)\]", entry)
+    if not match:
+        match = re.search(r"\[\s*(N(?:\s*,\s*\d+)*)\s*,?\s*\]", entry)
     if not match:
         return None
     dims = [part.strip() for part in match.group(1).split(",") if part.strip()]

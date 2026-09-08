@@ -3,16 +3,16 @@
 # All values can be overridden via environment variables (see launch_server.py).
 
 # Absolute path to the model weights directory on THIS machine.
-model_path: models/llm-qwen3.5-4B
+model_path: models/llm-qwen3.5-9B-awq
 
-served_model_name: Qwen/Qwen3.5-4B
+served_model_name: Qwen/Qwen3.5-9B-AWQ
 
 # Bind to 0.0.0.0 so the server is reachable from other machines on the network.
 host: 0.0.0.0
 port: 8000
 
 max_model_len: 11776
-gpu_memory_utilization: 0.85
+gpu_memory_utilization: 0.975
 max_num_seqs: 1
 startup_timeout_seconds: 300
 

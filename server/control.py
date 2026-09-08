@@ -15,10 +15,15 @@ logger = logging.getLogger(__name__)
 
 
 def stop_server(pid_file: Path, base_url: str, timeout: int = 60) -> bool:
-    """Kill the server process and return immediately.
+    """Kill the server process and wait until the GPU actually reflects it.
 
-    Sends SIGKILL so the kernel reclaims GPU memory right away. No polling —
-    PPO's own initialisation (60–90 s) gives the OS ample time to clean up.
+    Sends SIGKILL, then polls ``nvidia-smi`` until GPU memory usage drops back
+    near idle (or a short timeout elapses) before returning. SIGKILL does not
+    guarantee the NVIDIA driver has reclaimed the process's VRAM by the time it
+    returns; on some machines PPO's own startup (Isaac Sim scene creation,
+    PhysX GPU-buffer allocation) reaches its first CUDA allocation in well
+    under 10 seconds, racing the driver's cleanup and causing a CUDA OOM even
+    though the server process is already dead.
     Returns True if a process was found and killed, False if no PID file exists.
     """
     pid = _read_pid(pid_file)
@@ -39,8 +44,28 @@ def stop_server(pid_file: Path, base_url: str, timeout: int = 60) -> bool:
                 break
 
     pid_file.unlink(missing_ok=True)
-    logger.info("vLLM server killed — GPU memory will be released by the OS.")
+    _wait_for_gpu_memory_released()
+    logger.info("vLLM server killed — GPU memory released.")
     return True
+
+
+def _wait_for_gpu_memory_released(timeout: float = 15.0, interval: float = 0.5, threshold_mib: int = 500) -> None:
+    """Poll ``nvidia-smi`` until GPU memory usage drops near idle or ``timeout`` elapses."""
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5, check=True,
+            )
+            used_mib = int(result.stdout.strip().splitlines()[0])
+        except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError, IndexError):
+            return  # nvidia-smi unavailable or unparsable -- skip the extra wait
+        if used_mib <= threshold_mib:
+            return
+        time.sleep(interval)
+    logger.warning("GPU memory still elevated after %.0fs wait; proceeding anyway.", timeout)
 
 
 def start_server(launcher: Path, pid_file: Path, base_url: str, timeout: int = 300) -> bool:
