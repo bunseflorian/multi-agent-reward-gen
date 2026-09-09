@@ -243,6 +243,8 @@ def _run_single(
             max_iterations=form.ppo_kwargs.get("max_iterations"),
             timeout_seconds=form.ppo_kwargs.get("timeout_seconds"),
             headless=form.ppo_kwargs.get("headless", True),
+            record_video=form.ppo_kwargs.get("record_video"),
+            record_gif=form.ppo_kwargs.get("record_gif"),
             hooks=RunHooks(
                 ppo_progress_callback=show_ppo_progress if form.run_rl else None,
                 pre_training_callback=pre_cb,
@@ -367,6 +369,18 @@ def _render_result(st, *, state: RunState, run_dir: Path, run_rl: bool) -> None:
 
     if run_rl:
         render_tensorboard_metrics(st, run_dir)
+        _render_episode_media(st, run_dir)
+
+
+def _render_episode_media(st, run_dir: Path) -> None:
+    gif_path = run_dir / "episode.gif"
+    video_path = run_dir / "episode.mp4"
+    if gif_path.is_file():
+        st.subheader("Final episode")
+        st.image(str(gif_path))
+    elif video_path.is_file():
+        st.subheader("Final episode")
+        st.video(str(video_path))
 
 
 def _write_error_lines(st, errors: list[str]) -> None:

@@ -11,6 +11,7 @@ paths:
   isaaclab_conda_env: isaaclab
   isaaclab_launcher: isaaclab.sh
   rl_games_train_script: scripts/reinforcement_learning/rl_games/train.py
+  rl_games_play_script: scripts/reinforcement_learning/rl_games/play.py
 
 llm:
   # If the vLLM server runs on a separate machine, set this to http://<server-ip>:8000/v1
@@ -58,6 +59,9 @@ ppo:
   headless: true
   task_id: qwen_agent_task
   backend: rl_games
+  record_video: false
+  video_length: 1000
+  record_gif: false
 
 ui:
   objective: Minimize distance to the target position while maintaining low angular velocity.

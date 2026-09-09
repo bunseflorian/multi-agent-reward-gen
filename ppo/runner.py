@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ..configs import config_path
 from ..core import PPOConfig, PPOReport, TaskBrief
-from .command import QWEN_AGENT_EXPERIMENT_NAME, build_ppo_command
+from .command import QWEN_AGENT_EXPERIMENT_NAME, build_ppo_command, build_play_command
 from .summary import summarize_ppo_log
 
 
@@ -65,9 +65,6 @@ def run_ppo_validation(
 
     _save_policy_artifacts(run_path, summary.get("experiment_dir"), candidate_path)
 
-    summary_path = run_path / "ppo_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
     errors = list(summary.get("errors", []))
     status = "timeout" if timed_out else "passed" if exit_code == 0 else "failed"
     passed = status == "passed" or (timed_out and not errors)
@@ -76,6 +73,17 @@ def run_ppo_validation(
         if timed_out and passed
         else []
     )
+
+    if (config.record_video or config.record_gif) and passed and summary.get("experiment_dir"):
+        video_path, gif_path = _record_episode_video(run_path, Path(summary["experiment_dir"]), config, root)
+        if video_path is not None:
+            summary["episode_video_path"] = str(video_path)
+        if gif_path is not None:
+            summary["episode_gif_path"] = str(gif_path)
+
+    summary_path = run_path / "ppo_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
     return PPOReport(
         status=status,
         passed=passed,
@@ -220,6 +228,93 @@ def _read_tail(path: Path, max_chars: int = 6000) -> str:
     except FileNotFoundError:
         return ""
     return text[-max_chars:]
+
+
+def _find_final_checkpoint(nn_dir: Path) -> Path | None:
+    """Return the checkpoint to play for video/GIF recording.
+
+    rl_games only writes the canonical ``<name>.pth`` when a run's "best
+    reward so far" trigger fires during training; short or otherwise
+    unremarkable runs may only ever have the periodic
+    ``last_<name>_ep_<n>_rew_<r>.pth`` saves. Prefer the canonical file when
+    present, otherwise fall back to the most recently modified checkpoint in
+    the directory (the furthest-trained one).
+    """
+
+    canonical = nn_dir / f"{QWEN_AGENT_EXPERIMENT_NAME}.pth"
+    if canonical.is_file():
+        return canonical
+    checkpoints = [p for p in nn_dir.glob("*.pth") if p.is_file()] if nn_dir.is_dir() else []
+    if not checkpoints:
+        return None
+    return max(checkpoints, key=lambda p: p.stat().st_mtime)
+
+
+def _record_episode_video(
+    run_path: Path,
+    experiment_dir: Path,
+    config: PPOConfig,
+    isaaclab_root: Path,
+) -> tuple[Path | None, Path | None]:
+    """Play the final checkpoint headless for one episode and save it as an MP4 (+ optional GIF).
+
+    Best-effort: runs before the caller's post-training hook (e.g. restarting
+    the local vLLM server) reclaims the GPU, but never fails the overall PPO
+    report if recording itself breaks. Returns ``(mp4_path, gif_path)``, either
+    of which may be ``None`` if that step didn't produce a file.
+    """
+
+    checkpoint_path = _find_final_checkpoint(experiment_dir / "nn")
+    if checkpoint_path is None:
+        return None, None
+
+    command = build_play_command(config, checkpoint_path, isaaclab_root=isaaclab_root)
+    play_log_path = run_path / "play.log"
+    try:
+        with play_log_path.open("wb") as play_log:
+            subprocess.run(
+                command,
+                cwd=isaaclab_root,
+                stdout=play_log,
+                stderr=subprocess.STDOUT,
+                timeout=config.timeout_seconds,
+                check=False,
+            )
+    except (subprocess.TimeoutExpired, OSError):
+        return None, None
+
+    video_dir = experiment_dir / "videos" / "play"
+    videos = sorted(video_dir.glob("*.mp4"))
+    if not videos:
+        return None, None
+    source_mp4 = videos[-1]
+
+    mp4_path: Path | None = None
+    if config.record_video:
+        mp4_path = run_path / "episode.mp4"
+        shutil.copy2(source_mp4, mp4_path)
+
+    gif_path = _convert_to_gif(source_mp4, run_path / "episode.gif") if config.record_gif else None
+    return mp4_path, gif_path
+
+
+def _convert_to_gif(mp4_path: Path, gif_path: Path, fps: int = 10, width: int = 480) -> Path | None:
+    """Convert a recorded episode to a palette-optimized GIF via ffmpeg. Best-effort."""
+
+    filter_chain = f"fps={fps},scale={width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(mp4_path), "-vf", filter_chain, str(gif_path)],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0 or not gif_path.is_file():
+        gif_path.with_suffix(".gif.log").write_bytes(result.stderr)
+        return None
+    return gif_path
 
 
 def _save_policy_artifacts(

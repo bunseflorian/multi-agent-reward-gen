@@ -36,8 +36,7 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
         labels,
         index=labels.index(default_label) if default_label in labels else 0,
     )
-    custom = st.text_input("Custom env path", value=selected)
-    path = Path(custom).expanduser()
+    path = Path(selected).expanduser()
     env_path = path if path.is_absolute() else project_root / path
 
     objective = st.text_area(
@@ -79,6 +78,16 @@ def render_task_form(st, env_files: list[Path], project_root: Path) -> TaskFormV
             "timeout_seconds": int(st.number_input("PPO timeout_seconds", min_value=30, value=config_get("ppo.timeout_seconds") or 30, step=30)),
             "headless": st.checkbox("PPO headless", value=config_get("ppo.headless")),
         }
+        ppo_kwargs["record_video"] = st.checkbox(
+            "Record final episode as MP4",
+            value=config_get("ppo.record_video"),
+            help="Plays the final checkpoint headless for one episode and saves it as episode.mp4 in the run directory, before the local LLM server is restarted.",
+        )
+        ppo_kwargs["record_gif"] = st.checkbox(
+            "Record final episode as GIF",
+            value=config_get("ppo.record_gif"),
+            help="Plays the final checkpoint headless for one episode and saves it as episode.gif (via ffmpeg, 10 fps, 480px wide). Independent of the MP4 option above.",
+        )
 
     return TaskFormValues(
         env_path=env_path,

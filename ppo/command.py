@@ -47,6 +47,39 @@ def build_ppo_command(
     return command
 
 
+def build_play_command(
+    config: PPOConfig,
+    checkpoint_path: Path,
+    isaaclab_root: Path | None = None,
+) -> list[str]:
+    """Return the RL-Games play command for recording one episode as video."""
+
+    isaaclab_config_root = config_path("paths.isaaclab_root")
+    root = Path(isaaclab_root) if isaaclab_root is not None else isaaclab_config_root
+    launcher = root / config_path("paths.isaaclab_launcher").relative_to(isaaclab_config_root)
+    play_script = config_path("paths.rl_games_play_script").relative_to(isaaclab_config_root)
+
+    command = [
+        str(launcher),
+        "-p",
+        str(play_script),
+        "--task",
+        config.task_id,
+        "--checkpoint",
+        str(checkpoint_path),
+        "--num_envs",
+        "1",
+        "--headless",
+        "--video",
+        "--video_length",
+        str(config.video_length),
+    ]
+    conda_env = configured_conda_env()
+    if conda_env:
+        command = ["conda", "run", "-n", conda_env, *command]
+    return command
+
+
 def configured_conda_env() -> str | None:
     """Return the IsaacLab conda env from central app config, or ``None``."""
 

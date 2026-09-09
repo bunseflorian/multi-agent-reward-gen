@@ -115,6 +115,9 @@ class PPOConfig:
     headless: bool = field(default_factory=lambda: _ppo_default("headless"))
     task_id: str = field(default_factory=lambda: _ppo_default("task_id"))
     backend: str = field(default_factory=lambda: _ppo_default("backend"))
+    record_video: bool = field(default_factory=lambda: _ppo_default("record_video"))
+    video_length: int = field(default_factory=lambda: _ppo_default("video_length"))
+    record_gif: bool = field(default_factory=lambda: _ppo_default("record_gif"))
     hooks: RunHooks = field(default_factory=RunHooks, compare=False, repr=False)
 
 
