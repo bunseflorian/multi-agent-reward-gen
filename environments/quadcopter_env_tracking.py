@@ -95,9 +95,6 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     moment_scale = 0.01
 
     # randomizable task parameters
-    target_xy_range: float = 2.0
-    target_xy_range_bounds: tuple[float, float] = (1.0, 3.0)
-
     target_z_min: float = 0.5
     target_z_min_bounds: tuple[float, float] = (0.3, 1.0)
 
@@ -225,7 +222,10 @@ class QuadcopterEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
-        terminated = torch.logical_or(died, self._success)
+        # Tracking is a continuous pursuit task -- the target keeps moving for
+        # the whole episode, so `self._success` (cumulative time spent close
+        # enough) stays a metric only and never ends the episode early.
+        terminated = died
         return terminated, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
@@ -244,15 +244,16 @@ class QuadcopterEnv(DirectRLEnv):
         self._actions[env_ids] = 0.0
         self._close_step_count[env_ids] = 0
         self._success[env_ids] = False
-        self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-self.cfg.target_xy_range, self.cfg.target_xy_range)
-        self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
-        self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(self.cfg.target_z_min, self.cfg.target_z_max)
-        self._desired_vel_w[env_ids, :2] = torch.zeros_like(self._desired_vel_w[env_ids, :2]).uniform_(-self.cfg.target_xy_vel_range, self.cfg.target_xy_vel_range)
-        self._desired_vel_w[env_ids, 2] = torch.zeros_like(self._desired_vel_w[env_ids, 2]).uniform_(-self.cfg.target_z_vel_range, self.cfg.target_z_vel_range)
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
         default_root_state[:, :3] += self._terrain.env_origins[env_ids]
+        # Target starts collocated with the drone's own spawn point, then
+        # immediately begins moving -- the agent has to give chase from step 0
+        # instead of first travelling to a random starting offset.
+        self._desired_pos_w[env_ids] = default_root_state[:, :3]
+        self._desired_vel_w[env_ids, :2] = torch.zeros_like(self._desired_vel_w[env_ids, :2]).uniform_(-self.cfg.target_xy_vel_range, self.cfg.target_xy_vel_range)
+        self._desired_vel_w[env_ids, 2] = torch.zeros_like(self._desired_vel_w[env_ids, 2]).uniform_(-self.cfg.target_z_vel_range, self.cfg.target_z_vel_range)
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)

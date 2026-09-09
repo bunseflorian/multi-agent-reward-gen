@@ -30,8 +30,10 @@ Signal contract:
 
 Episode termination:
 - Classify visible conditions as success/failure/timeout/unknown.
-- If an env-provided success flag exists, it is the authoritative completion signal: log it as `final_task_success` and give it a large sparse success bonus.
-- If that success flag also ends the episode (check `_get_dones`), state explicitly: "Success ends the episode early — size the success bonus to exceed the dense reward the agent would accumulate by lingering for the remaining episode steps instead of finishing, or the agent will learn to delay/avoid success to keep farming dense reward." This is a distinct reward-hacking risk from failure/timeout hacking and must be called out whenever it applies.
+- If an env-provided boolean completion signal exists (e.g. `self._success`, `self._task_success`), it is the authoritative completion signal and MUST be logged as `final_task_success` — always, regardless of whether it currently ends the episode in `_get_dones`. Never drop it from Metrics; do not reason your way out of this rule.
+- Separately, decide the reward treatment based on whether that flag ends the episode (check `_get_dones`):
+  - If it DOES end the episode: give it a large sparse success bonus, and state explicitly: "Success ends the episode early — size the success bonus to exceed the dense reward the agent would accumulate by lingering for the remaining episode steps instead of finishing, or the agent will learn to delay/avoid success to keep farming dense reward." This is a distinct reward-hacking risk from failure/timeout hacking and must be called out whenever it applies.
+  - If it does NOT end the episode (e.g. a continuous-pursuit task where success is a cumulative/diagnostic signal only): a large bonus is optional, not required — the early-termination-hacking risk above does not apply, since there is no episode-ending event to game. It may still get a modest bonus, or remain metric-only.
 - This section is lifecycle context only — never turn failure/timeout into constraints or metrics unless requested.
 - One-line reward-hacking note if relevant (keep the primary objective positive/action-informative; don't add failure penalties unless requested).
 
