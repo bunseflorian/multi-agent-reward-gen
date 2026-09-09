@@ -92,6 +92,51 @@ def extract_env_code_context(
     return "\n".join(header) + "\n\n```python\n" + "\n\n".join(chunks).strip() + "\n```"
 
 
+def extract_env_tensor_shapes(env_path: str | Path) -> dict[str, tuple[int, ...]]:
+    """Ground-truth self.* tensor shapes read from the env's ``torch.zeros(self.num_envs, ...)``-style declarations.
+
+    These override whatever the Planner claims in its Signal contract: the
+    Planner restates shapes as free text and can misremember them, while these
+    come straight from the tensors the env itself will actually hand to the
+    generated reward code.
+    """
+
+    source = Path(env_path).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    shapes: dict[str, tuple[int, ...]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self"):
+            continue
+        call = node.value
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "torch"
+            and call.func.attr in {"zeros", "ones", "empty"}
+            and call.args
+        ):
+            continue
+        first = call.args[0]
+        is_num_envs = (isinstance(first, ast.Attribute) and first.attr == "num_envs") or (
+            isinstance(first, ast.Name) and first.id == "num_envs"
+        )
+        if not is_num_envs:
+            continue
+        extra_dims: list[int] = []
+        for arg in call.args[1:]:
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, int)):
+                extra_dims = None
+                break
+            extra_dims.append(arg.value)
+        if extra_dims is not None:
+            shapes[target.attr] = tuple(extra_dims)
+    return shapes
+
+
 def _extract_chunks(
     tree: ast.Module,
     lines: list[str],

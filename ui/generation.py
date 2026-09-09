@@ -373,9 +373,6 @@ def _render_result(st, *, state: RunState, run_dir: Path, run_rl: bool) -> None:
 
 
 def _render_episode_media(st, run_dir: Path) -> None:
-    # Each PPO attempt lives in its own rl_run_NN subdirectory (see
-    # orchestrator.py), so episode.gif/episode.mp4 land there, not directly
-    # under run_dir. Show every iteration's recording, labeled by iteration.
     iteration_dirs = sorted(p for p in run_dir.glob("rl_run_*") if p.is_dir())
     media_found = False
     for iteration_dir in iteration_dirs:

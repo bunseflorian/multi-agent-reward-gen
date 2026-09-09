@@ -222,10 +222,7 @@ class QuadcopterEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
-        # Tracking is a continuous pursuit task -- the target keeps moving for
-        # the whole episode, so `self._success` (cumulative time spent close
-        # enough) stays a metric only and never ends the episode early.
-        terminated = died
+        terminated = died  # self._success stays a metric only; the target keeps moving all episode
         return terminated, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
@@ -248,10 +245,7 @@ class QuadcopterEnv(DirectRLEnv):
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
         default_root_state[:, :3] += self._terrain.env_origins[env_ids]
-        # Target starts collocated with the drone's own spawn point, then
-        # immediately begins moving -- the agent has to give chase from step 0
-        # instead of first travelling to a random starting offset.
-        self._desired_pos_w[env_ids] = default_root_state[:, :3]
+        self._desired_pos_w[env_ids] = default_root_state[:, :3]  # target starts at the drone's spawn point
         self._desired_vel_w[env_ids, :2] = torch.zeros_like(self._desired_vel_w[env_ids, :2]).uniform_(-self.cfg.target_xy_vel_range, self.cfg.target_xy_vel_range)
         self._desired_vel_w[env_ids, 2] = torch.zeros_like(self._desired_vel_w[env_ids, 2]).uniform_(-self.cfg.target_z_vel_range, self.cfg.target_z_vel_range)
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)

@@ -75,12 +75,7 @@ def parse_reward_code(raw_response: str) -> ParsedRewardCode:
 
 
 def strip_comments(code: str) -> str:
-    """Remove ``#`` comments from a Python snippet, keeping all other code exactly.
-
-    Uses ``tokenize`` (not regex) so a ``#`` inside a string literal is never
-    touched. Falls back to the original code unchanged if it doesn't tokenize
-    cleanly -- never corrupt code we can't safely parse.
-    """
+    """Remove ``#`` comments via ``tokenize`` so a ``#`` inside a string literal is untouched."""
 
     comment_cols: dict[int, int] = {}
     try:
@@ -99,7 +94,7 @@ def strip_comments(code: str) -> str:
         if i in comment_cols:
             line = line[: comment_cols[i]].rstrip()
             if not line:
-                continue  # drop lines that were comment-only
+                continue
         result.append(line)
     return "\n".join(result)
 
@@ -183,7 +178,7 @@ def _extract_plan_tensor_section(
             continue
         match = re.search(
             r"(self\.[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)(?:\s*(\[shape:[^\]]+\]))?",
-            stripped,
+            stripped.replace("`", ""),
         )
         if not match:
             continue

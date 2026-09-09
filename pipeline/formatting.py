@@ -46,17 +46,7 @@ def check_ppo_success_rate(
     threshold: float = 0.95,
     window_fraction: float = 0.05,
 ) -> bool | None:
-    """Deterministically decide PPO acceptance from a success-rate metric.
-
-    Looks for a recognized per-episode success metric (``final_task_success``,
-    ``final_success``, or ``mean_success_rate``, in that preference order) in
-    the sampled ``metric_history`` and computes the success rate over the last
-    ``window_fraction`` of its sampled values (at least one point). Returns
-    ``True`` when that rate exceeds ``threshold``, ``False`` when it does not,
-    and ``None`` when no recognized success metric is present -- callers
-    should fall back to LLM judgment in that case (e.g. a PPO runtime crash
-    with no metric_history, or a dense-only objective with no success flag).
-    """
+    """Success rate over the last `window_fraction` of a recognized success metric; None if none is present."""
 
     if not isinstance(metric_history, list) or not metric_history:
         return None

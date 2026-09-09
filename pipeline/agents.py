@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from .prompts import (
     REVIEWER_SYSTEM_PROMPT,
     REVIEWER_USER,
 )
+from .env_context import extract_env_tensor_shapes
 from .static_check import static_check as _static_check_direct
 
 
@@ -67,7 +69,11 @@ def _call(
 
 # ── static check ─────────────────────────────────────────────────────────────
 
-def _run_static_check(code: str, allowed_tensors: list[str] | None) -> TestReport:
+def _run_static_check(
+    code: str,
+    allowed_tensors: list[str] | None,
+    env_tensor_shapes: dict[str, tuple[int, ...]] | None = None,
+) -> TestReport:
     from ..configs import config_get
     try:
         conda_env = config_get("paths.isaaclab_conda_env")
@@ -75,9 +81,13 @@ def _run_static_check(code: str, allowed_tensors: list[str] | None) -> TestRepor
         conda_env = None
 
     if not conda_env:
-        return _static_check_direct(code, allowed_tensors)
+        return _static_check_direct(code, allowed_tensors, env_tensor_shapes)
 
-    payload = json.dumps({"code": code, "allowed_tensors": allowed_tensors})
+    payload = json.dumps({
+        "code": code,
+        "allowed_tensors": allowed_tensors,
+        "env_tensor_shapes": env_tensor_shapes,
+    })
     try:
         result = subprocess.run(
             ["conda", "run", "--no-capture-output", "-n", conda_env, "python", _STATIC_CHECK_SCRIPT],
@@ -100,6 +110,11 @@ def _run_static_check(code: str, allowed_tensors: list[str] | None) -> TestRepor
         )
     except Exception as exc:
         return TestReport(passed=False, errors=[f"static_check subprocess error: {exc}"])
+
+
+@lru_cache(maxsize=8)
+def _cached_env_tensor_shapes(env_source_path: str) -> dict[str, tuple[int, ...]]:
+    return extract_env_tensor_shapes(env_source_path)
 
 
 # ── planner ───────────────────────────────────────────────────────────────────
@@ -171,11 +186,13 @@ def reviewer(
     client: QwenClient,
     plan: PlanArtifact,
     code: CodeArtifact,
+    task_brief: TaskBrief,
     *,
     enable_thinking: bool = False,
     logger: RunRecorder | None = None,
 ) -> CodeReviewArtifact:
-    static_report = _run_static_check(code.code, extract_plan_tensor_contract(plan.text))
+    env_tensor_shapes = _cached_env_tensor_shapes(task_brief.env_source_path)
+    static_report = _run_static_check(code.code, extract_plan_tensor_contract(plan.text), env_tensor_shapes)
 
     static_parts: list[str] = []
     if static_report.errors:
@@ -194,10 +211,7 @@ def reviewer(
 
     def parse(raw: str) -> tuple[CodeReviewArtifact, str]:
         result = extract_final_answer(raw)
-        # The static checker is the sole source of truth for pass/fail; the LLM
-        # only narrates it (see REVIEWER_SYSTEM_PROMPT) and must never veto a
-        # static PASS or rubber-stamp a static FAIL.
-        passed = static_report.passed
+        passed = static_report.passed  # sole source of truth; the LLM only narrates it
         feedback = extract_review_feedback(result)
         return CodeReviewArtifact(
             passed=passed,
@@ -244,12 +258,7 @@ def critic(
         else format_metric_history(raw_metric_history)
     )
 
-    # Deterministic acceptance gate: like the Reviewer's static check, this is
-    # authoritative when it applies. It only abstains (None) when there is no
-    # recognized success-rate metric to judge (e.g. a PPO crash with no
-    # metric_history, or a dense-only objective without a success flag) --
-    # only then does the LLM's own DECISION line drive should_retry.
-    ppo_success = check_ppo_success_rate(raw_metric_history)
+    ppo_success = check_ppo_success_rate(raw_metric_history)  # authoritative when not None; else LLM's DECISION drives should_retry
     ppo_success_check = (
         "PASSED (success rate over the last 5% of sampled episodes exceeds 95%)" if ppo_success is True
         else "FAILED (success rate over the last 5% of sampled episodes is at or below 95%)" if ppo_success is False

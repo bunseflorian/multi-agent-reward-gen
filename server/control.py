@@ -15,17 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def stop_server(pid_file: Path, base_url: str, timeout: int = 60) -> bool:
-    """Kill the server process and wait until the GPU actually reflects it.
-
-    Sends SIGKILL, then polls ``nvidia-smi`` until GPU memory usage drops back
-    near idle (or a short timeout elapses) before returning. SIGKILL does not
-    guarantee the NVIDIA driver has reclaimed the process's VRAM by the time it
-    returns; on some machines PPO's own startup (Isaac Sim scene creation,
-    PhysX GPU-buffer allocation) reaches its first CUDA allocation in well
-    under 10 seconds, racing the driver's cleanup and causing a CUDA OOM even
-    though the server process is already dead.
-    Returns True if a process was found and killed, False if no PID file exists.
-    """
+    """Kill the server, then wait for the GPU to actually reflect it before returning."""
     pid = _read_pid(pid_file)
     if pid is None:
         logger.warning("No PID file at %s — server was not started via the configured launcher.", pid_file)
@@ -44,12 +34,12 @@ def stop_server(pid_file: Path, base_url: str, timeout: int = 60) -> bool:
                 break
 
     pid_file.unlink(missing_ok=True)
-    _wait_for_gpu_memory_released()
+    wait_for_gpu_memory_released()
     logger.info("vLLM server killed — GPU memory released.")
     return True
 
 
-def _wait_for_gpu_memory_released(timeout: float = 15.0, interval: float = 0.5, threshold_mib: int = 500) -> None:
+def wait_for_gpu_memory_released(timeout: float = 15.0, interval: float = 0.5, threshold_mib: int = 500) -> None:
     """Poll ``nvidia-smi`` until GPU memory usage drops near idle or ``timeout`` elapses."""
 
     deadline = time.monotonic() + timeout

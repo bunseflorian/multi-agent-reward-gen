@@ -13,6 +13,7 @@ from pathlib import Path
 
 from ..configs import config_path
 from ..core import PPOConfig, PPOReport, TaskBrief
+from ..server import wait_for_gpu_memory_released
 from .command import QWEN_AGENT_EXPERIMENT_NAME, build_ppo_command, build_play_command
 from .summary import summarize_ppo_log
 
@@ -231,15 +232,7 @@ def _read_tail(path: Path, max_chars: int = 6000) -> str:
 
 
 def _find_final_checkpoint(nn_dir: Path) -> Path | None:
-    """Return the checkpoint to play for video/GIF recording.
-
-    rl_games only writes the canonical ``<name>.pth`` when a run's "best
-    reward so far" trigger fires during training; short or otherwise
-    unremarkable runs may only ever have the periodic
-    ``last_<name>_ep_<n>_rew_<r>.pth`` saves. Prefer the canonical file when
-    present, otherwise fall back to the most recently modified checkpoint in
-    the directory (the furthest-trained one).
-    """
+    """Return the checkpoint to play; falls back to the newest `last_*` save if the canonical file is missing."""
 
     canonical = nn_dir / f"{QWEN_AGENT_EXPERIMENT_NAME}.pth"
     if canonical.is_file():
@@ -256,13 +249,7 @@ def _record_episode_video(
     config: PPOConfig,
     isaaclab_root: Path,
 ) -> tuple[Path | None, Path | None]:
-    """Play the final checkpoint headless for one episode and save it as an MP4 (+ optional GIF).
-
-    Best-effort: runs before the caller's post-training hook (e.g. restarting
-    the local vLLM server) reclaims the GPU, but never fails the overall PPO
-    report if recording itself breaks. Returns ``(mp4_path, gif_path)``, either
-    of which may be ``None`` if that step didn't produce a file.
-    """
+    """Play the final checkpoint for one episode; returns (mp4_path, gif_path), either possibly None. Best-effort."""
 
     checkpoint_path = _find_final_checkpoint(experiment_dir / "nn")
     if checkpoint_path is None:
@@ -272,16 +259,23 @@ def _record_episode_video(
     play_log_path = run_path / "play.log"
     try:
         with play_log_path.open("wb") as play_log:
-            subprocess.run(
+            # conda run doesn't forward signals reliably; kill the whole group on timeout.
+            process = subprocess.Popen(
                 command,
                 cwd=isaaclab_root,
                 stdout=play_log,
                 stderr=subprocess.STDOUT,
-                timeout=config.timeout_seconds,
-                check=False,
+                start_new_session=True,
             )
-    except (subprocess.TimeoutExpired, OSError):
+            try:
+                process.wait(timeout=config.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                _terminate_process_group(process)
+                return None, None
+    except OSError:
         return None, None
+
+    wait_for_gpu_memory_released()  # driver may lag process exit; caller restarts vLLM right after
 
     video_dir = experiment_dir / "videos" / "play"
     videos = sorted(video_dir.glob("*.mp4"))

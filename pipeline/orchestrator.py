@@ -161,6 +161,7 @@ def build_graph(client: QwenClient, *, recorder: RunRecorder):  # noqa: ARG001
             client,
             state["plan"],
             state["code"],
+            state["task_brief"],
             enable_thinking=state["enable_thinking"].get("reviewer", False),
             logger=state["recorder"],
         )

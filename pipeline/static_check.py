@@ -81,8 +81,15 @@ ISAACLAB_TENSOR_SPECS: dict[str, tuple[int, ...]] = {
 def static_check(
     code: str,
     allowed_tensors: list[str] | None = None,
+    env_tensor_shapes: dict[str, tuple[int, ...]] | None = None,
 ) -> TestReport:
-    """Validate reward code with an AST pass and a mock torch execution."""
+    """Validate reward code with an AST pass and a mock torch execution.
+
+    ``env_tensor_shapes``, when given, are shapes read directly from the env's
+    own ``torch.zeros(self.num_envs, ...)`` declarations and take priority
+    over whatever the Planner's Signal contract claims for the same path --
+    the Planner restates shapes as free text and can misremember them.
+    """
 
     num_envs = 8
     errors: list[str] = []
@@ -101,7 +108,7 @@ def static_check(
         return TestReport(False, errors=errors, warnings=warnings, metadata={"stage": "ast"})
 
     try:
-        namespace = _mock_namespace(num_envs, used_self_paths, allowed_tensors)
+        namespace = _mock_namespace(num_envs, used_self_paths, allowed_tensors, env_tensor_shapes)
         exec(compile(code, "<generated_reward>", "exec"), _safe_globals(), namespace)
     except ImportError as exc:
         return TestReport(False, errors=[f"torch is required for mock tensor tests: {exc}"])
@@ -290,11 +297,13 @@ def _mock_namespace(
     num_envs: int,
     used_self_paths: list[str],
     shape_entries: list[str] | None,
+    env_tensor_shapes: dict[str, tuple[int, ...]] | None = None,
 ) -> dict[str, Any]:
     import torch
 
     specs = dict(ISAACLAB_TENSOR_SPECS)
     specs.update(_shape_specs_from_entries(shape_entries))
+    specs.update(env_tensor_shapes or {})
 
     env_self = SimpleNamespace(
         num_envs=num_envs,
@@ -442,11 +451,23 @@ def _looks_like_batched_per_env_indexing(node: ast.Subscript) -> bool:
 
 
 def _self_leaf_paths(tree: ast.Module) -> set[str]:
-    paths = {
-        _dotted_name(node)[len("self.") :]
+    # `self._x.norm(...)`: `.norm` is a Call's func, i.e. a tensor method, not
+    # a nested attribute to mock -- use the receiver (`self._x`) instead.
+    call_func_ids = {
+        id(node.func)
         for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and _dotted_name(node).startswith("self.")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
+
+    paths: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        source = node.value if id(node) in call_func_ids else node
+        dotted = _dotted_name(source)
+        if dotted.startswith("self."):
+            paths.add(dotted[len("self.") :])
+
     return {path for path in paths if not any(other.startswith(path + ".") for other in paths)}
 
 
@@ -557,9 +578,13 @@ if __name__ == "__main__":
     import sys
 
     payload = json.loads(sys.stdin.read())
+    env_tensor_shapes = {
+        path: tuple(dims) for path, dims in (payload.get("env_tensor_shapes") or {}).items()
+    }
     report = static_check(
         payload["code"],
         allowed_tensors=payload.get("allowed_tensors"),
+        env_tensor_shapes=env_tensor_shapes,
     )
     json.dump(
         {
