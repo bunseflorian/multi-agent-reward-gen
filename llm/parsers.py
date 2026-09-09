@@ -7,7 +7,9 @@ planner, reviewer, critic, and coder.
 
 from __future__ import annotations
 
+import io
 import re
+import tokenize
 from dataclasses import dataclass
 
 
@@ -68,7 +70,38 @@ def parse_reward_code(raw_response: str) -> ParsedRewardCode:
     if not python_blocks:
         raise ValueError("Coder response did not contain a fenced Python code block.")
 
-    return ParsedRewardCode(raw_response=raw_response, code=python_blocks[-1], thinking=thinking)
+    code = strip_comments(python_blocks[-1])
+    return ParsedRewardCode(raw_response=raw_response, code=code, thinking=thinking)
+
+
+def strip_comments(code: str) -> str:
+    """Remove ``#`` comments from a Python snippet, keeping all other code exactly.
+
+    Uses ``tokenize`` (not regex) so a ``#`` inside a string literal is never
+    touched. Falls back to the original code unchanged if it doesn't tokenize
+    cleanly -- never corrupt code we can't safely parse.
+    """
+
+    comment_cols: dict[int, int] = {}
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(code).readline):
+            if tok.type == tokenize.COMMENT:
+                row, col = tok.start
+                comment_cols[row] = col
+    except (tokenize.TokenizeError, IndentationError, SyntaxError, ValueError):
+        return code
+    if not comment_cols:
+        return code
+
+    lines = code.splitlines()
+    result: list[str] = []
+    for i, line in enumerate(lines, start=1):
+        if i in comment_cols:
+            line = line[: comment_cols[i]].rstrip()
+            if not line:
+                continue  # drop lines that were comment-only
+        result.append(line)
+    return "\n".join(result)
 
 
 def extract_logged_output(raw_response: str) -> str:
@@ -86,7 +119,7 @@ def extract_logged_output(raw_response: str) -> str:
         if match.group("lang").lower() in {"python", "py"}
     ]
     if python_blocks:
-        return python_blocks[-1]
+        return strip_comments(python_blocks[-1])
 
     return stripped
 
