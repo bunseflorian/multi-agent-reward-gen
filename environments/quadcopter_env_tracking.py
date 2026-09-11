@@ -116,7 +116,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     success_duration_ratio: float = 0.7
     success_duration_ratio_bounds: tuple[float, float] = (0.5, 0.9)
 
-    max_ang_vel: float = 5.0
+    max_ang_vel: float = 10.0
 
 
 class QuadcopterEnv(DirectRLEnv):

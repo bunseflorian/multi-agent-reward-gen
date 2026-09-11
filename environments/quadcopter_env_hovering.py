@@ -116,7 +116,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     crash_z_max: float = 2.0
     crash_z_max_bounds: tuple[float, float] = (1.5, 3.0)
 
-    max_ang_vel: float = 5.0
+    max_ang_vel: float = 10.0
 
 
 class QuadcopterEnv(DirectRLEnv):

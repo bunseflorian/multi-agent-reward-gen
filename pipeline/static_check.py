@@ -96,11 +96,13 @@ def static_check(
 
     tree = _parse(code, errors)
     used_self_paths: list[str] = []
+    self_created_paths: set[str] = set()
     if tree is not None:
         _validate_ast(tree, errors, code)
         _check_reward_assignment(tree, errors)
         _check_reward_combination_line(tree, errors, code)
         used_self_paths = sorted(_used_reward_self_paths(tree))
+        self_created_paths = _self_created_paths(tree)
         if allowed_tensors is not None:
             _validate_self_attrs(used_self_paths, allowed_tensors, errors)
     if errors:
@@ -111,7 +113,9 @@ def static_check(
     # .squeeze(-1) on a genuinely (N,)-shaped tensor -- are a no-op at N=8 but collapse
     # to a 0-d scalar at N=1, so they only surface deep into a real PPO run otherwise.
     for probe_num_envs in (8, 1):
-        exec_errors = _run_mock(code, probe_num_envs, used_self_paths, allowed_tensors, env_tensor_shapes)
+        exec_errors = _run_mock(
+            code, probe_num_envs, used_self_paths, allowed_tensors, env_tensor_shapes, self_created_paths
+        )
         if exec_errors:
             tag = f" (only at num_envs={probe_num_envs})" if probe_num_envs != 8 else ""
             return TestReport(
@@ -130,11 +134,14 @@ def _run_mock(
     used_self_paths: list[str],
     allowed_tensors: list[str] | None,
     env_tensor_shapes: dict[str, tuple[int, ...]] | None,
+    self_created_paths: set[str] | None = None,
 ) -> list[str]:
     """Exec the reward code against a mock ``self``/``torch`` at a given ``num_envs``; return errors, if any."""
 
     try:
-        namespace = _mock_namespace(num_envs, used_self_paths, allowed_tensors, env_tensor_shapes)
+        namespace = _mock_namespace(
+            num_envs, used_self_paths, allowed_tensors, env_tensor_shapes, self_created_paths
+        )
         exec(compile(code, "<generated_reward>", "exec"), _safe_globals(), namespace)
     except ImportError as exc:
         return [f"torch is required for mock tensor tests: {exc}"]
@@ -314,12 +321,14 @@ def _mock_namespace(
     used_self_paths: list[str],
     shape_entries: list[str] | None,
     env_tensor_shapes: dict[str, tuple[int, ...]] | None = None,
+    self_created_paths: set[str] | None = None,
 ) -> dict[str, Any]:
     import torch
 
     specs = dict(ISAACLAB_TENSOR_SPECS)
     specs.update(_shape_specs_from_entries(shape_entries))
     specs.update(env_tensor_shapes or {})
+    self_created_paths = self_created_paths or set()
 
     env_self = SimpleNamespace(
         num_envs=num_envs,
@@ -337,7 +346,11 @@ def _mock_namespace(
     )
 
     for path in used_self_paths:
-        if not path:
+        if not path or path in self_created_paths:
+            # The code assigns this attribute itself (e.g. `self._ang_vel_mag = ...`) --
+            # leave it absent so the mock hits the same AttributeError a real first call
+            # would hit if the code reads it before ever assigning it. Pre-populating it
+            # like an env-provided tensor would hide exactly that ordering bug.
             continue
         shape = specs.get(path)
         value = _mock_value_for_path(path, shape, num_envs)
@@ -505,6 +518,34 @@ def _is_base_self_path(path: str) -> bool:
     if root in {"extras", "_episode_sums", "_episode_final_values", "_episode_max_values"}:
         return method in _BASE_DICT_METHODS
     return False
+
+
+def _self_created_paths(tree: ast.Module) -> set[str]:
+    """Return bare ``self.X`` names the code assigns to itself (``self.X = ...`` / ``self.X += ...``).
+
+    These must NOT be pre-populated in the mock namespace: unlike env-provided tensors
+    (``self._robot.data...``), they don't exist until the generated code creates them.
+    Leaving them absent makes the mock hit the same ``AttributeError`` a real first call
+    would hit if the code reads one of these before ever assigning it -- e.g. a value
+    computed under an untaken ``if`` branch, or referenced before its own assignment line.
+    """
+
+    created: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AugAssign):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+            ):
+                created.add(target.attr)
+    return created
 
 
 def _normalize_tensor_entry(entry: str) -> str:
