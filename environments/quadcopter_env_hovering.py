@@ -116,6 +116,8 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     crash_z_max: float = 2.0
     crash_z_max_bounds: tuple[float, float] = (1.5, 3.0)
 
+    max_ang_vel: float = 5.0
+
 
 class QuadcopterEnv(DirectRLEnv):
     cfg: QuadcopterEnvCfg
@@ -204,6 +206,8 @@ class QuadcopterEnv(DirectRLEnv):
             self._robot.data.root_pos_w[:, 2] < self.cfg.crash_z_min,
             self._robot.data.root_pos_w[:, 2] > self.cfg.crash_z_max,
         )
+        ang_vel_exceeded = torch.norm(self._robot.data.root_ang_vel_b, dim=-1) > self.cfg.max_ang_vel
+        died = torch.logical_or(died, ang_vel_exceeded)
         terminated = torch.logical_or(died, self._success)
         return terminated, time_out
 

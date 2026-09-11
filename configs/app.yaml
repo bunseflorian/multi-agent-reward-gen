@@ -62,6 +62,7 @@ ppo:
   record_video: false
   video_length: 1000
   record_gif: false
+  video_timeout_seconds: 120
 
 ui:
   objective: Minimize distance to the target position while maintaining low angular velocity.

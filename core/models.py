@@ -118,6 +118,7 @@ class PPOConfig:
     record_video: bool = field(default_factory=lambda: _ppo_default("record_video"))
     video_length: int = field(default_factory=lambda: _ppo_default("video_length"))
     record_gif: bool = field(default_factory=lambda: _ppo_default("record_gif"))
+    video_timeout_seconds: int = field(default_factory=lambda: _ppo_default("video_timeout_seconds"))
     hooks: RunHooks = field(default_factory=RunHooks, compare=False, repr=False)
 
 

@@ -116,6 +116,8 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     success_duration_ratio: float = 0.7
     success_duration_ratio_bounds: tuple[float, float] = (0.5, 0.9)
 
+    max_ang_vel: float = 5.0
+
 
 class QuadcopterEnv(DirectRLEnv):
     cfg: QuadcopterEnvCfg
@@ -222,6 +224,8 @@ class QuadcopterEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
+        ang_vel_exceeded = torch.norm(self._robot.data.root_ang_vel_b, dim=-1) > self.cfg.max_ang_vel
+        died = torch.logical_or(died, ang_vel_exceeded)
         terminated = died  # self._success stays a metric only; the target keeps moving all episode
         return terminated, time_out
 

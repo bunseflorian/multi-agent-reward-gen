@@ -257,6 +257,7 @@ def _record_episode_video(
 
     command = build_play_command(config, checkpoint_path, isaaclab_root=isaaclab_root)
     play_log_path = run_path / "play.log"
+    timed_out = False
     try:
         with play_log_path.open("wb") as play_log:
             # conda run doesn't forward signals reliably; kill the whole group on timeout.
@@ -268,14 +269,17 @@ def _record_episode_video(
                 start_new_session=True,
             )
             try:
-                process.wait(timeout=config.timeout_seconds)
+                process.wait(timeout=config.video_timeout_seconds)
             except subprocess.TimeoutExpired:
                 _terminate_process_group(process)
-                return None, None
+                timed_out = True
     except OSError:
         return None, None
+    finally:
+        wait_for_gpu_memory_released()  # driver may lag process exit; caller restarts vLLM right after
 
-    wait_for_gpu_memory_released()  # driver may lag process exit; caller restarts vLLM right after
+    if timed_out:
+        return None, None
 
     video_dir = experiment_dir / "videos" / "play"
     videos = sorted(video_dir.glob("*.mp4"))

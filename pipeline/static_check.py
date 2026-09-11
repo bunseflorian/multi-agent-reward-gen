@@ -91,7 +91,6 @@ def static_check(
     the Planner restates shapes as free text and can misremember them.
     """
 
-    num_envs = 8
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -107,27 +106,44 @@ def static_check(
     if errors:
         return TestReport(False, errors=errors, warnings=warnings, metadata={"stage": "ast"})
 
+    # Run the mock at num_envs=8 AND num_envs=1: play.py (video/GIF recording, manual
+    # visualization) always launches with --num_envs 1, and some bugs -- notably
+    # .squeeze(-1) on a genuinely (N,)-shaped tensor -- are a no-op at N=8 but collapse
+    # to a 0-d scalar at N=1, so they only surface deep into a real PPO run otherwise.
+    for probe_num_envs in (8, 1):
+        exec_errors = _run_mock(code, probe_num_envs, used_self_paths, allowed_tensors, env_tensor_shapes)
+        if exec_errors:
+            tag = f" (only at num_envs={probe_num_envs})" if probe_num_envs != 8 else ""
+            return TestReport(
+                False,
+                errors=[f"{e}{tag}" for e in exec_errors],
+                warnings=warnings,
+                metadata={"stage": "exec", "num_envs": probe_num_envs},
+            )
+
+    return TestReport(passed=True, errors=[], warnings=warnings, metadata={"stage": "exec"})
+
+
+def _run_mock(
+    code: str,
+    num_envs: int,
+    used_self_paths: list[str],
+    allowed_tensors: list[str] | None,
+    env_tensor_shapes: dict[str, tuple[int, ...]] | None,
+) -> list[str]:
+    """Exec the reward code against a mock ``self``/``torch`` at a given ``num_envs``; return errors, if any."""
+
     try:
         namespace = _mock_namespace(num_envs, used_self_paths, allowed_tensors, env_tensor_shapes)
         exec(compile(code, "<generated_reward>", "exec"), _safe_globals(), namespace)
     except ImportError as exc:
-        return TestReport(False, errors=[f"torch is required for mock tensor tests: {exc}"])
+        return [f"torch is required for mock tensor tests: {exc}"]
     except Exception as exc:
-        return TestReport(
-            False,
-            errors=[f"Mock execution failed: {type(exc).__name__}: {exc}"],
-            warnings=warnings,
-            metadata={"stage": "exec"},
-        )
+        return [f"Mock execution failed: {type(exc).__name__}: {exc}"]
 
-    errors.extend(_reward_errors(namespace.get("reward"), num_envs))
+    errors = _reward_errors(namespace.get("reward"), num_envs)
     errors.extend(_metric_store_errors(namespace.get("self"), num_envs))
-    return TestReport(
-        passed=not errors,
-        errors=errors,
-        warnings=warnings,
-        metadata={"stage": "exec", "num_envs": num_envs},
-    )
+    return errors
 
 
 static_check.__test__ = False
