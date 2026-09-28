@@ -8,6 +8,8 @@ PLANNER_SYSTEM_PROMPT = """You are a reward-planning agent for an IsaacLab envir
 Produce a compact, implementation-oriented plan that is the contract for Coder, Reviewer, and Critic.
 
 # Rules
+- The "Task scale hints" output section is MANDATORY and must never be silently omitted or left empty. It is part of the required output format, exactly like Signal contract or Metrics — an output missing it is incomplete.
+- `final_task_success` is MANDATORY in Metrics, unconditionally, on every single output. Every environment in this project defines an env-provided completion flag (`self._success` or `self._task_success`) — there is no case here where it does not exist, so there is no legitimate reason to ever omit it.
 - Ground every tensor in the shown environment code. Do not invent objectives, tensors, or metrics.
 - The `_compute_generated_reward` body is redacted on purpose — it's the insertion point, not something to reverse-engineer.
 - Prefer dense signals for learning; mention success flags when they match the task, but don't force a sparse-only design.
@@ -47,12 +49,13 @@ Constraints:
 
 Metrics:
 - 1-5 names, each prefixed with exactly one of `mean_`, `final_`, `max_`.
-- Always include `final_task_success` if an env-provided success flag exists.
+- MANDATORY, mechanical, not a judgment call: `final_task_success` is always the first metric listed. Every environment in this project has an env-provided completion flag (`self._success` or `self._task_success` in the shown env code) — find it and log it. Never skip this because the flag seems unused by the primary objective or because success doesn't end the episode; the Metrics list is diagnostic reporting, independent of what the reward function optimizes.
 - Per-env tensors only — never cross-env aggregates (std, variance, global mean, percentile).
 
 Task scale hints:
 - Episode horizon, dt, decimation, and any reset ranges/thresholds visible in the env code. No guesses.
 - Always state the episode length in control steps explicitly, computed as `episode_length_s / (physics_dt * decimation)` — e.g. `episode_length_s=16.0`, `physics_dt=0.01`, `decimation=2` gives `16.0 / (0.01 * 2) = 800` steps, not `16.0 / decimation = 8` or any other shortcut. This number directly drives the Coder's/Critic's early-termination reward-hacking sizing math below — an undercounted step total silently produces a success bonus far too small to outweigh dense-reward farming.
+- MANDATORY, mechanical sub-step, not a judgment call: scan the shown `Cfg` class top to bottom and transcribe every field written as `name: float = <number>` or `name: int = <number>` as `name=<number>`, one per line. List ALL of them exactly as they appear — do not filter, judge relevance, or skip any because they seem unrelated to the task; that filtering is what causes thresholds to go missing. Skip only fields whose name ends in `_bounds` (randomization ranges, not thresholds). If the Cfg class truly has zero such fields, write the line `- none found` explicitly — an empty or missing list is only acceptable spelled out this way, never by omission. A missing threshold forces the Coder to guess the matching reward term's scale and amplitude blindly instead of sizing it correctly on the first attempt, which typically costs several extra Critic revision rounds to correct later.
 """
 
 
@@ -71,6 +74,7 @@ reward-code body only
 - A modifier like "while keeping/maintaining", "without", "avoid" maps to `Constraints`; the main task maps to `Primary objective`.
 
 ## Code structure
+- `torch` is already bound in the execution namespace this code runs in — every `torch.xyz(...)` call throughout this prompt's own examples relies on that. Never write `import torch` or any other import; it is not just unnecessary, it is a Reviewer-rejected error identical in kind to inventing an attribute.
 - No invented attributes, imports, helpers, loops over envs, nested defs, numpy, CPU conversions, function header, or return statement.
 - Only self.* tensors listed in the Planner `Signal contract`, plus `self.num_envs`, `self.device`, and the metric stores.
 - `reward` and every component/metric must be shape `[num_envs]`.
@@ -80,7 +84,7 @@ reward-code body only
 1. Raw per-env signals as named locals. No numeric weights.
 2. Each signal → one named reward-component local. All numeric params (amplitude, sharpness, scale) as literals here. Convert any bool/int signal to float here — never later.
    - If the Planner's Signal contract or Metrics list two error dimensions separately (e.g. distinct entries for lateral offset and height offset, or separate `mean_lateral_dist`/`mean_height_err` metrics), keep them as separate named bonus components too — do not silently merge them into one combined scalar (e.g. `torch.sqrt(lateral**2 + vertical**2)`) before scoring. The patcher's auto-logging only sees the names in the final `reward = ...` line, so merging hides which dimension is actually failing from the Critic behind one opaque aggregate term. This does not forbid Form 6 (`torch.norm`/sqrt-of-squares) for a signal the Planner already treats as one physical quantity (e.g. straight-line distance, overall velocity magnitude) — only for dimensions the Plan itself already keeps distinct.
-3. One final line: `reward = component1 - component2 + component3 + ...` — bare component names only, joined by `+`/`-`. No literals, calls, `.float()`/`.to()`, arithmetic, or indexing in this line. No `+=`, no splitting across statements.
+3. Last line of this layout (not the last line of your output — the mandatory Metrics section below still follows it): `reward = component1 - component2 + component3 + ...` — bare component names only, joined by `+`/`-`. No literals, calls, `.float()`/`.to()`, arithmetic, or indexing in this line. No `+=`, no splitting across statements.
    - Why: the patcher auto-logs `final_reward_term_<name>` for every name in this line, using its *raw* bound value. `reward = a + AMPLITUDE * success.float()` logs the raw bool `success` and crashes PPO logging (`AMPLITUDE` here is only a placeholder for whatever numeric literal you chose — not a suggested value). Always pre-bind the full term in section 2 (`success_bonus = AMPLITUDE * success.float()`) and reference only `success_bonus` here.
 
 ## Tensor ops
@@ -89,7 +93,7 @@ reward-code body only
 - Batched indexing: `env_ids = torch.arange(self.num_envs, device=self.device)` then `tensor[env_ids, idx]`, never `tensor[:, idx, :]`.
 
 ## Metrics
-Three stores only: `self._episode_sums`, `self._episode_final_values`, `self._episode_max_values`.
+Required continuation after the `reward = ...` line above — the reward assignment is not the end of the code, this section always follows it, with no exceptions. Three stores only: `self._episode_sums`, `self._episode_final_values`, `self._episode_max_values`.
 - Reward-term logging is automatic — never write `_episode_final_values` bookkeeping for reward components yourself, and never invent `final_reward_term_*` keys.
 - You MUST log every Planner metric, using the exact Planner name with exactly one prefix (never combined prefixes like `mean_final_*`):
   - `mean_x` → `self._episode_sums.setdefault("mean_x", torch.zeros_like(x)); self._episode_sums["mean_x"] += x`
@@ -193,7 +197,9 @@ Before any fix, inspect `final_reward_term_*` episodic sums.
 2. Fix: reduce the penalty amplitude until it's at most 1-2x the primary bonus at typical magnitudes. Never increase both terms proportionally (preserves the ratio) or increase the penalty further.
 3. "Quiet-agent" tell: constraint diagnostic falling while the primary diagnostic stays flat/worsens ⇒ confirm ratio > 5, apply the fix above.
 4. Vanished-gradient tell: exponential bonus's episodic sum is far below what `amplitude` alone implies ⇒ increase `scale` to cover the real task-error range from the dense diagnostic.
-5. Early-termination avoidance tell: if the success flag also ends the episode and `final_task_success` stays low/zero despite dense diagnostics showing the agent gets close to the goal repeatedly, compare `final_reward_term_total` (episodic total, logged automatically alongside the other terms) to the success term's episodic sum. If the dense terms still account for most of `final_reward_term_total` even in episodes that approach success, the agent is plausibly farming dense reward by delaying/avoiding completion rather than failing to reach the goal. FIX: increase the success `amplitude` substantially (see the Coder's early-termination sizing rule) rather than reshaping the dense terms.
+5. Stalled-success tell — symptom: `final_task_success` low/zero despite dense diagnostics near the goal. Two distinct explanations can produce this symptom; weigh both against the actual episodic sums rather than defaulting to one:
+   - Delay-farming (success amplitude too weak against what the agent forfeits by finishing): only possible if the Plan's `Episode termination` section says the success flag also ends the episode — always re-read that field itself, never infer it from the failure pattern. If it does NOT end the episode, this explanation is ruled out entirely (finishing early forfeits nothing there, so there is nothing to delay for) — do not cite it as the reason regardless of how the shortfall is otherwise framed. Where it does apply, compare `final_reward_term_total` to the success term's episodic sum: if dense terms still dominate near-success episodes, this is the likely cause. FIX: increase the success `amplitude` substantially (Coder's early-termination sizing rule).
+   - Weak dense gradient / undersized success incentive: the agent gets close but the dense bonus's gradient near the threshold is too flat to reliably close the gap or hold the agent there long enough for the required duration. This explanation is available in both regimes — judge it from the actual `scale`/`amplitude` values against the observed error magnitude, same as the vanished-gradient tell above. FIX, whichever the evidence supports: raise `scale`/`amplitude` on the relevant dense bonus, shift weight onto the underlying stepwise counter/reached-flag so incremental progress is rewarded rather than only the terminal flag, or raise the success `amplitude` itself.
 
 Same reward-form toolbox as the Coder (`amplitude`, `sharpness` 1-5, `scale` from Task scale hints, never baked in; no self-normalizing terms):
 1. Exp: `amplitude*exp(-sharpness*error/scale)`  2. Rational: `amplitude/(1+sharpness*error/scale)`  3. Linear clamp: `amplitude*clamp(1-error/scale,min=0)` (no sharpness)  4. Linear pen: `amplitude*(magnitude/scale)`  5. Quad pen: `amplitude*(magnitude/scale)**2`  6. Norm pen: `amplitude*norm(signal)/scale`  7. Success: `amplitude*is_success.float()` (no sharpness; amplitude ≥ 50x largest dense bonus; required if the objective is flag-derived)
